@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/qt/qt_key_modifiers.h"
 #include "lang/lang_keys.h"
 #include "statistics/chart_lines_filter_controller.h"
+#include "statistics/statistics_format_values.h"
 #include "statistics/view/abstract_chart_view.h"
 #include "statistics/view/chart_view_factory.h"
 #include "statistics/view/stack_chart_common.h"
@@ -72,22 +73,19 @@ void FillLineColorsByKey(Data::StatisticalChart &chartData) {
 	if (leftTimestamp < kOneDay) {
 		return {};
 	}
-	const auto formatter = u"d MMM yyyy"_q;
-	const auto leftDateTime = QDateTime::fromSecsSinceEpoch(
-		leftTimestamp / 1000);
-	const auto leftText = QLocale().toString(leftDateTime.date(), formatter);
+	const auto leftText = LangDayMonthYear(leftTimestamp / 1000);
 	if ((xIndexMin == xIndexMax) && !chartData.weekFormat) {
 		return leftText;
 	} else {
 		constexpr auto kSevenDays = 3600 * 24 * 7;
-		const auto rightDateTime = QDateTime::fromSecsSinceEpoch(0
+		const auto rightTimestamp = 0
 			+ (chartData.x[xIndexMax] / 1000)
-			+ (chartData.weekFormat ? kSevenDays : 0));
+			+ (chartData.weekFormat ? kSevenDays : 0);
 		return leftText
 			+ ' '
 			+ QChar(8212)
 			+ ' '
-			+ QLocale().toString(rightDateTime.date(), formatter);
+			+ LangDayMonthYear(rightTimestamp);
 	}
 }
 
@@ -109,7 +107,8 @@ void PaintBottomLine(
 		startXIndex,
 		xPercentageLimits.max);
 
-	const auto edgeAlphaSize = st::statisticsChartBottomCaptionMaxWidth / 4.;
+	const auto captionMaxWidth = chartData.dayStringMaxWidth;
+	const auto edgeAlphaSize = captionMaxWidth / 4.;
 
 	for (auto k = 0; k < dates.size(); k++) {
 		const auto &date = dates[k];
@@ -147,9 +146,9 @@ void PaintBottomLine(
 				/ float64(chartData.x.back() - chartData.x.front());
 			const auto xPoint = xPercentage * fullWidth - offset;
 			const auto r = QRectF(
-				xPoint - st::statisticsChartBottomCaptionMaxWidth / 2.,
+				xPoint - captionMaxWidth / 2.,
 				y,
-				st::statisticsChartBottomCaptionMaxWidth,
+				captionMaxWidth,
 				st::statisticsChartBottomCaptionHeight);
 			const auto edgeAlpha = (r.x() < 0)
 				? std::max(
@@ -852,6 +851,9 @@ ChartWidget::ChartWidget(not_null<Ui::RpWidget*> parent)
 }
 
 int ChartWidget::resizeGetHeight(int newWidth) {
+	if (newWidth <= 0) {
+		return 0;
+	}
 	if (_filterButtons) {
 		_filterButtons->resizeToWidth(newWidth);
 	}
@@ -971,7 +973,7 @@ void ChartWidget::setupChartArea() {
 			[[maybe_unused]] const auto o = ScopedPainterOpacity(
 				p,
 				p.opacity() * kRulerLineAlpha);
-			const auto bottom = r
+			const auto bottom = rect()
 				- QMargins{ 0, rect::bottom(chartRect), 0, 0 };
 			p.fillRect(bottom, st::boxBg);
 			p.fillRect(
@@ -1020,7 +1022,7 @@ void ChartWidget::updateBottomDates() {
 
 	const auto by = int(_chartArea->width() / float64(_chartData.x.size()));
 	_bottomLine.captionIndicesOffset = 0
-		+ st::statisticsChartBottomCaptionMaxWidth / std::max(by, 1);
+		+ _chartData.dayStringMaxWidth / std::max(by, 1);
 
 	const auto isCurrentNull = (_bottomLine.current.stepMinFast == 0);
 	if (!isCurrentNull
@@ -1154,20 +1156,12 @@ void ChartWidget::setupDetails() {
 		_chartArea->update();
 		return;
 	}
-	const auto maxAbsoluteValue = [&] {
-		auto maxValue = 0;
-		for (const auto &l : _chartData.lines) {
-			maxValue = std::max(l.maxValue, maxValue);
-		}
-		return maxValue;
-	}();
 	if (hasLocalZoom()) {
 		_zoomEnabled = true;
 	}
 	_details.widget = base::make_unique_q<PointDetailsWidget>(
 		this,
 		_chartData,
-		maxAbsoluteValue,
 		_zoomEnabled);
 	_details.widget->setClickedCallback([=] {
 		const auto index = _details.widget->xIndex();
@@ -1462,7 +1456,7 @@ void ChartWidget::setChartData(
 	_chartView = CreateChartView(type);
 	_chartView->setLinesFilterController(_linesFilterController);
 	_rulersView.setChartData(_chartData, type, _linesFilterController);
-	_areRulersAbove = (type == ChartViewType::Stack);
+	_areRulersAbove = (type == ChartViewType::StackBar);
 
 	if (_chartData.isFooterHidden) {
 		_footer->hide();

@@ -8,8 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "history/view/media/history_view_media.h"
+#include "ui/userpic_view.h"
 
 namespace Data {
+class DocumentMedia;
 class Media;
 class PhotoMedia;
 } // namespace Data
@@ -20,6 +22,8 @@ class RippleAnimation;
 
 namespace HistoryView {
 
+class Sticker;
+
 class WebPage : public Media {
 public:
 	WebPage(
@@ -27,13 +31,14 @@ public:
 		not_null<WebPageData*> data,
 		MediaWebPageFlags flags);
 
-	[[nodiscard]] static bool HasButton(not_null<WebPageData*> data);
-
 	void refreshParentId(not_null<HistoryItem*> realParent) override;
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
+	bool aboveTextByDefault() const override {
+		return false;
+	}
 	bool hideMessageText() const override {
 		return false;
 	}
@@ -100,6 +105,47 @@ public:
 	~WebPage();
 
 private:
+	struct FactcheckMetrics {
+		int lines = 0;
+		bool expandable = false;
+		bool expanded = false;
+	};
+	struct HintData {
+		QSize size;
+		QPointF lastPosition;
+		QString text;
+		int widthBefore = 0;
+		std::unique_ptr<Ui::RippleAnimation> ripple;
+		ClickHandlerPtr link;
+	};
+	struct StickerSetData {
+		std::vector<std::unique_ptr<Sticker>> views;
+	};
+	struct SponsoredData {
+		ClickHandlerPtr link;
+		ClickHandlerPtr mediaLink;
+		QString buttonText;
+
+		uint64 backgroundEmojiId = 0;
+		uint8 colorIndex : 6 = 0;
+		uint8 isLinkInternal : 1 = 0;
+		uint8 canReport : 1 = 0;
+		uint8 hasMedia : 1 = 0;
+
+		HintData hint;
+	};
+	struct FactcheckData {
+		HintData hint;
+		Ui::Text::String footer;
+		uint32 footerHeight : 30 = 0;
+		uint32 expandable : 1 = 0;
+		uint32 expanded : 1 = 0;
+	};
+	using AdditionalData = std::variant<
+		StickerSetData,
+		SponsoredData,
+		FactcheckData>;
+
 	void playAnimation(bool autoplay) override;
 	QSize countOptimalSize() override;
 	QSize countCurrentSize(int newWidth) override;
@@ -123,8 +169,20 @@ private:
 		const ClickHandlerPtr &link) const;
 	[[nodiscard]] bool asArticle() const;
 
+	[[nodiscard]] StickerSetData *stickerSetData() const;
+	[[nodiscard]] SponsoredData *sponsoredData() const;
+	[[nodiscard]] FactcheckData *factcheckData() const;
+	[[nodiscard]] HintData *hintData() const;
+
+	[[nodiscard]] FactcheckMetrics computeFactcheckMetrics(
+		int fullHeight) const;
+
+	void setupAdditionalData();
+
 	const style::QuoteStyle &_st;
 	const not_null<WebPageData*> _data;
+	const MediaWebPageFlags _flags;
+
 	std::vector<std::unique_ptr<Data::Media>> _collage;
 	ClickHandlerPtr _openl;
 	std::unique_ptr<Media> _attach;
@@ -140,17 +198,16 @@ private:
 	Ui::Text::String _siteName;
 	Ui::Text::String _title;
 	Ui::Text::String _description;
+	Ui::Text::String _openButton;
 
-	QString _openButton;
 	QString _duration;
-	int _openButtonWidth = 0;
 	int _durationWidth = 0;
 
 	mutable QPoint _lastPoint;
 	int _pixw = 0;
 	int _pixh = 0;
 
-	const MediaWebPageFlags _flags;
+	std::unique_ptr<AdditionalData> _additionalData;
 
 };
 

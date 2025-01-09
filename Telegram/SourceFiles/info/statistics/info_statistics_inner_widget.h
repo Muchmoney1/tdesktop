@@ -21,22 +21,34 @@ namespace Info::Statistics {
 class Memento;
 class MessagePreview;
 
+enum class LoadingType {
+	Statistic,
+	Boosts,
+	Earn,
+};
+
+void FillLoading(
+	not_null<Ui::VerticalLayout*> container,
+	LoadingType type,
+	rpl::producer<bool> toggleOn,
+	rpl::producer<> showFinished);
+
 class InnerWidget final : public Ui::VerticalLayout {
 public:
 	struct ShowRequest final {
 		PeerId info = PeerId(0);
 		FullMsgId history;
 		FullMsgId messageStatistic;
+		FullStoryId storyStatistic;
+		FullStoryId story;
 	};
 
 	InnerWidget(
 		QWidget *parent,
 		not_null<Controller*> controller,
 		not_null<PeerData*> peer,
-		FullMsgId contextId);
-
-	[[nodiscard]] not_null<PeerData*> peer() const;
-	[[nodiscard]] FullMsgId contextId() const;
+		FullMsgId contextId,
+		FullStoryId storyId);
 
 	[[nodiscard]] rpl::producer<Ui::ScrollToRequest> scrollToRequests() const;
 	[[nodiscard]] rpl::producer<ShowRequest> showRequests() const;
@@ -49,11 +61,12 @@ public:
 private:
 	void load();
 	void fill();
-	void fillRecentPosts();
+	void fillRecentPosts(not_null<Ui::VerticalLayout*> container);
 
 	not_null<Controller*> _controller;
 	not_null<PeerData*> _peer;
 	FullMsgId _contextId;
+	FullStoryId _storyId;
 
 	std::vector<not_null<MessagePreview*>> _messagePreviews;
 

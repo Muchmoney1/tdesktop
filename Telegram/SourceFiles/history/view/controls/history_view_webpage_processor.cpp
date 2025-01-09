@@ -204,6 +204,8 @@ WebpageProcessor::WebpageProcessor(
 	) | rpl::filter([=](not_null<WebPageData*> page) {
 		return (_data == page.get());
 	}) | rpl::start_with_next([=] {
+		_draft.id = _data->id;
+		_draft.url = _data->url;
 		updateFromData();
 	}, _lifetime);
 
@@ -255,6 +257,7 @@ void WebpageProcessor::apply(Data::WebPageDraft draft, bool reparse) {
 	const auto was = _link;
 	if (draft.removed) {
 		_draft = draft;
+		_parsedLinks = _parser.list().current();
 		if (_parsedLinks.empty()) {
 			_draft.removed = false;
 		}

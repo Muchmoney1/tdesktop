@@ -219,7 +219,7 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 	auto tshift = inner.top();
 	auto paintw = inner.width();
 
-	const auto colorIndex = parent()->colorIndex();
+	const auto colorIndex = parent()->contentColorIndex();
 	const auto selected = context.selected();
 	const auto cache = context.outbg
 		? stm->replyCache[st->colorPatternIndex(colorIndex)].get()
@@ -280,6 +280,7 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 			.selection = toDescriptionSelection(context.selection),
 			.elisionHeight = _descriptionLines * lineHeight,
 			.elisionRemoveFromEnd = endskip,
+			.useFullWidth = true,
 		});
 		tshift += _descriptionLines * lineHeight;
 	}
@@ -413,13 +414,12 @@ void Game::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed) {
 			if (!_ripple) {
 				const auto full = QRect(0, 0, width(), height());
 				const auto outer = full.marginsRemoved(inBubblePadding());
-				const auto owner = &parent()->history()->owner();
 				_ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::RoundRectMask(
 						outer.size(),
 						_st.radius),
-					[=] { owner->requestViewRepaint(parent()); });
+					[=] { repaint(); });
 			}
 			_ripple->add(_lastPoint);
 		} else if (_ripple) {

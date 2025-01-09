@@ -54,6 +54,7 @@ Q_DECLARE_METATYPE(MsgId);
 }
 
 using StoryId = int32;
+using BusinessShortcutId = int32;
 
 struct FullStoryId {
 	PeerId peer = 0;
@@ -77,14 +78,17 @@ constexpr auto ServerMaxStoryId = StoryId(1 << 30);
 constexpr auto StoryMsgIds = int64(ServerMaxStoryId);
 constexpr auto EndStoryMsgId = MsgId(StartStoryMsgId.bare + StoryMsgIds);
 constexpr auto ServerMaxMsgId = MsgId(1LL << 56);
-constexpr auto ScheduledMsgIdsRange = (1LL << 32);
+constexpr auto ScheduledMaxMsgId = MsgId(ServerMaxMsgId + (1LL << 32));
+constexpr auto ShortcutMaxMsgId = MsgId(ScheduledMaxMsgId + (1LL << 32));
 constexpr auto ShowAtUnreadMsgId = MsgId(0);
 
 constexpr auto SpecialMsgIdShift = EndStoryMsgId.bare;
 constexpr auto ShowAtTheEndMsgId = MsgId(SpecialMsgIdShift + 1);
 constexpr auto SwitchAtTopMsgId = MsgId(SpecialMsgIdShift + 2);
 constexpr auto ShowAndStartBotMsgId = MsgId(SpecialMsgIdShift + 4);
+constexpr auto ShowAndMaybeStartBotMsgId = MsgId(SpecialMsgIdShift + 5);
 constexpr auto ShowForChooseMessagesMsgId = MsgId(SpecialMsgIdShift + 6);
+constexpr auto kSearchQueryOffsetHint = -1;
 
 static_assert(SpecialMsgIdShift + 0xFF < 0);
 static_assert(-(SpecialMsgIdShift + 0xFF) > ServerMaxMsgId);
@@ -154,6 +158,18 @@ struct FullMsgId {
 	MsgId msg = 0;
 };
 
+#ifdef _DEBUG
+inline QDebug operator<<(QDebug debug, const FullMsgId &fullMsgId) {
+	debug.nospace()
+		<< "FullMsgId(peer: "
+		<< fullMsgId.peer.value
+		<< ", msg: "
+		<< fullMsgId.msg.bare
+		<< ")";
+	return debug;
+}
+#endif // _DEBUG
+
 Q_DECLARE_METATYPE(FullMsgId);
 
 struct FullReplyTo {
@@ -161,9 +177,10 @@ struct FullReplyTo {
 	TextWithEntities quote;
 	FullStoryId storyId;
 	MsgId topicRootId = 0;
+	int quoteOffset = 0;
 
 	[[nodiscard]] bool valid() const {
-		return messageId || (storyId && peerIsUser(storyId.peer));
+		return messageId || (storyId && storyId.peer);
 	}
 	explicit operator bool() const {
 		return valid();
@@ -203,6 +220,15 @@ struct hash<FullStoryId> {
 		return QtPrivate::QHashCombine().operator()(
 			std::hash<BareId>()(value.peer.value),
 			value.story);
+	}
+};
+
+template <>
+struct hash<FullMsgId> {
+	size_t operator()(FullMsgId value) const {
+		return QtPrivate::QHashCombine().operator()(
+			std::hash<BareId>()(value.peer.value),
+			value.msg.bare);
 	}
 };
 
