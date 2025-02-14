@@ -44,31 +44,6 @@ constexpr auto kUnknownVersion = -1;
 constexpr auto kNameWithCaptionsVersion = -2;
 constexpr auto kNameNoCaptionsVersion = -3;
 
-[[nodiscard]] bool HasCaptions(const HistoryItemsList &list) {
-	for (const auto &item : list) {
-		if (const auto media = item->media()) {
-			if (!item->originalText().text.isEmpty()
-				&& media->allowsEditCaption()) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-[[nodiscard]] bool HasOnlyForcedForwardedInfo(const HistoryItemsList &list) {
-	for (const auto &item : list) {
-		if (const auto media = item->media()) {
-			if (!media->forceForwardedInfo()) {
-				return false;
-			}
-		} else {
-			return false;
-		}
-	}
-	return true;
-}
-
 } // namespace
 
 ForwardPanel::ForwardPanel(Fn<void()> repaint)
@@ -127,7 +102,7 @@ void ForwardPanel::checkTexts() {
 		for (const auto item : _data.items) {
 			if (const auto from = item->originalSender()) {
 				version += from->nameVersion();
-			} else if (const auto info = item->hiddenSenderInfo()) {
+			} else if (const auto info = item->originalHiddenSenderInfo()) {
 				++version;
 			} else {
 				Unexpected("Corrupt forwarded information in message.");
@@ -168,7 +143,7 @@ void ForwardPanel::updateTexts() {
 					names.push_back(from->shortName());
 					fullname = from->name();
 				}
-			} else if (const auto info = item->hiddenSenderInfo()) {
+			} else if (const auto info = item->originalHiddenSenderInfo()) {
 				if (!insertedNames.contains(info->name)) {
 					insertedNames.emplace(info->name);
 					names.push_back(info->firstName);
@@ -178,7 +153,7 @@ void ForwardPanel::updateTexts() {
 				Unexpected("Corrupt forwarded information in message.");
 			}
 		}
-		if (!keepNames) {
+		if (!keepNames || HasOnlyDroppedForwardedInfo(_data.items)) {
 			from = tr::lng_forward_sender_names_removed(tr::now);
 		} else if (names.size() > 2) {
 			from = tr::lng_forwarding_from(
@@ -206,12 +181,8 @@ void ForwardPanel::updateTexts() {
 				.generateImages = false,
 				.ignoreGroup = true,
 			}).text;
-			const auto history = item->history();
-			const auto dropCustomEmoji = !history->session().premium()
-				&& !_to->peer()->isSelf()
-				&& (item->computeDropForwardedInfo() || !keepNames);
-			if (dropCustomEmoji) {
-				text = DropCustomEmoji(std::move(text));
+			if (item->computeDropForwardedInfo() || !keepNames) {
+				text = DropDisallowedCustomEmoji(_to->peer(), std::move(text));
 			}
 		} else {
 			text = Ui::Text::Colorized(
@@ -244,6 +215,10 @@ void ForwardPanel::itemRemoved(not_null<const HistoryItem*> item) {
 	}
 }
 
+const Data::ResolvedForwardDraft &ForwardPanel::draft() const {
+	return _data;
+}
+
 const HistoryItemsList &ForwardPanel::items() const {
 	return _data.items;
 }
@@ -252,70 +227,24 @@ bool ForwardPanel::empty() const {
 	return _data.items.empty();
 }
 
-void ForwardPanel::editOptions(std::shared_ptr<ChatHelpers::Show> show) {
-	using Options = Data::ForwardOptions;
-	const auto now = _data.options;
-	const auto count = _data.items.size();
-	const auto dropNames = (now != Options::PreserveInfo);
-	const auto hasCaptions = HasCaptions(_data.items);
-	const auto hasOnlyForcedForwardedInfo = hasCaptions
-		? false
-		: HasOnlyForcedForwardedInfo(_data.items);
-	const auto dropCaptions = (now == Options::NoNamesAndCaptions);
-	const auto weak = base::make_weak(this);
-	const auto changeRecipient = crl::guard(this, [=] {
-		if (_data.items.empty()) {
-			return;
-		}
-		auto data = base::take(_data);
-		_to->owningHistory()->setForwardDraft(_to->topicRootId(), {});
-		Window::ShowForwardMessagesBox(show, {
-			.ids = _to->owner().itemsToIds(data.items),
-			.options = data.options,
-		});
-	});
-	if (hasOnlyForcedForwardedInfo) {
-		changeRecipient();
+void ForwardPanel::applyOptions(Data::ForwardOptions options) {
+	if (_data.items.empty()) {
 		return;
+	} else if (_data.options != options) {
+		_data.options = options;
+		_to->owningHistory()->setForwardDraft(_to->topicRootId(), {
+			.ids = _to->owner().itemsToIds(_data.items),
+			.options = options,
+		});
+		_repaint();
 	}
-	const auto optionsChanged = crl::guard(weak, [=](
-			Ui::ForwardOptions options) {
-		if (_data.items.empty()) {
-			return;
-		}
-		const auto newOptions = (options.hasCaptions
-			&& options.dropCaptions)
-			? Options::NoNamesAndCaptions
-			: options.dropNames
-			? Options::NoSenderNames
-			: Options::PreserveInfo;
-		if (_data.options != newOptions) {
-			_data.options = newOptions;
-			_to->owningHistory()->setForwardDraft(_to->topicRootId(), {
-				.ids = _to->owner().itemsToIds(_data.items),
-				.options = newOptions,
-			});
-			_repaint();
-		}
-	});
-	show->showBox(Box(
-		Ui::ForwardOptionsBox,
-		count,
-		Ui::ForwardOptions{
-			.dropNames = dropNames,
-			.hasCaptions = hasCaptions,
-			.dropCaptions = dropCaptions,
-		},
-		optionsChanged,
-		changeRecipient));
 }
 
 void ForwardPanel::editToNextOption() {
 	using Options = Data::ForwardOptions;
-	const auto hasCaptions = HasCaptions(_data.items);
-	const auto hasOnlyForcedForwardedInfo = hasCaptions
-		? false
-		: HasOnlyForcedForwardedInfo(_data.items);
+	const auto captionsCount = ItemsForwardCaptionsCount(_data.items);
+	const auto hasOnlyForcedForwardedInfo = !captionsCount
+		&& HasOnlyForcedForwardedInfo(_data.items);
 	if (hasOnlyForcedForwardedInfo) {
 		return;
 	}
@@ -323,7 +252,7 @@ void ForwardPanel::editToNextOption() {
 	const auto now = _data.options;
 	const auto next = (now == Options::PreserveInfo)
 		? Options::NoSenderNames
-		: ((now == Options::NoSenderNames) && hasCaptions)
+		: ((now == Options::NoSenderNames) && captionsCount)
 		? Options::NoNamesAndCaptions
 		: Options::PreserveInfo;
 
@@ -396,7 +325,7 @@ void ForwardPanel::paint(
 		.now = now,
 		.pausedEmoji = paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = pausedSpoiler,
-		.elisionOneLine = true,
+		.elisionLines = 1,
 	});
 }
 
@@ -438,7 +367,7 @@ void EditWebPageOptions(
 			.result = draft,
 			});
 
-		state->large = Settings::AddButton(
+		state->large = Settings::AddButtonWithIcon(
 			box->verticalLayout(),
 			rpl::single(u"Force large media"_q),
 			st::settingsButton,
@@ -450,7 +379,7 @@ void EditWebPageOptions(
 			state->result = copy;
 		});
 
-		state->small = Settings::AddButton(
+		state->small = Settings::AddButtonWithIcon(
 			box->verticalLayout(),
 			rpl::single(u"Force small media"_q),
 			st::settingsButton,
@@ -472,7 +401,7 @@ void EditWebPageOptions(
 				: std::optional<QColor>());
 		}, box->lifetime());
 
-		Settings::AddButton(
+		Settings::AddButtonWithIcon(
 			box->verticalLayout(),
 			state->result.value(
 			) | rpl::map([=](const Data::WebPageDraft &draft) {
@@ -501,7 +430,28 @@ void EditWebPageOptions(
 			box->closeBox();
 		});
 	}));
+}
 
+bool HasOnlyForcedForwardedInfo(const HistoryItemsList &list) {
+	for (const auto &item : list) {
+		if (const auto media = item->media()) {
+			if (!media->forceForwardedInfo()) {
+				return false;
+			}
+		} else {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool HasOnlyDroppedForwardedInfo(const HistoryItemsList &list) {
+	for (const auto &item : list) {
+		if (!item->computeDropForwardedInfo()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 } // namespace HistoryView::Controls

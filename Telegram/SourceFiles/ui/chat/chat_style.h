@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/message_bubble.h"
 #include "ui/chat/chat_style_radius.h"
 #include "ui/style/style_core_palette.h"
+#include "history/history_view_swipe_data.h"
 #include "layout/layout_selection.h"
 #include "styles/style_basic.h"
 
@@ -89,7 +90,10 @@ struct MessageStyle {
 	style::icon historyPollChosen = { Qt::Uninitialized };
 	style::icon historyPollChoiceRight = { Qt::Uninitialized };
 	style::icon historyTranscribeIcon = { Qt::Uninitialized };
+	style::icon historyTranscribeLock = { Qt::Uninitialized };
 	style::icon historyTranscribeHide = { Qt::Uninitialized };
+	style::icon historyVoiceMessageTTL = { Qt::Uninitialized };
+	style::icon liveLocationLongIcon = { Qt::Uninitialized };
 	std::array<
 		std::unique_ptr<Text::QuotePaintCache>,
 		kColorPatternsCount> quoteCache;
@@ -117,6 +121,8 @@ struct MessageImageStyle {
 	style::icon historyVideoDownload = { Qt::Uninitialized };
 	style::icon historyVideoCancel = { Qt::Uninitialized };
 	style::icon historyVideoMessageMute = { Qt::Uninitialized };
+	style::icon historyVideoMessageTtlIcon = { Qt::Uninitialized };
+	style::icon historyPageEnlarge = { Qt::Uninitialized };
 };
 
 struct ReactionPaintInfo {
@@ -159,6 +165,7 @@ struct ChatPaintContext {
 	QPainterPath *highlightPathCache = nullptr;
 	mutable QRect highlightInterpolateTo;
 	crl::time now = 0;
+	HistoryView::ChatPaintGestureHorizontalData gestureHorizontal;
 
 	void translate(int x, int y) {
 		viewport.translate(x, y);
@@ -218,6 +225,14 @@ struct ChatPaintContext {
 
 };
 
+struct ChatPaintContextArgs {
+	not_null<ChatTheme*> theme;
+	QRect clip;
+	QPoint visibleAreaPositionGlobal;
+	int visibleAreaTop = 0;
+	int visibleAreaWidth = 0;
+};
+
 [[nodiscard]] int HistoryServiceMsgRadius();
 [[nodiscard]] int HistoryServiceMsgInvertedRadius();
 [[nodiscard]] int HistoryServiceMsgInvertedShrink();
@@ -235,11 +250,20 @@ struct ColorIndicesCompressed {
 	std::shared_ptr<std::array<ColorIndexData, kColorIndexCount>> colors;
 };
 
+[[nodiscard]] int ColorPatternIndex(
+	const ColorIndicesCompressed &indices,
+	uint8 colorIndex,
+	bool dark);
+
 struct ColorIndexValues {
 	std::array<QColor, kColorPatternsCount> outlines;
 	QColor name;
 	QColor bg;
 };
+
+[[nodiscard]] ColorIndexValues SimpleColorIndexValues(
+	QColor color,
+	int patternIndex);
 
 class ChatStyle final : public style::palette {
 public:
@@ -327,6 +351,9 @@ public:
 	[[nodiscard]] const style::TextPalette &serviceTextPalette() const {
 		return _serviceTextPalette;
 	}
+	[[nodiscard]] const style::TextPalette &priceTagTextPalette() const {
+		return _priceTagTextPalette;
+	}
 	[[nodiscard]] const style::icon &historyRepliesInvertedIcon() const {
 		return _historyRepliesInvertedIcon;
 	}
@@ -366,6 +393,9 @@ public:
 	[[nodiscard]] const style::icon &msgBotKbWebviewIcon() const {
 		return _msgBotKbWebviewIcon;
 	}
+	[[nodiscard]] const style::icon &msgBotKbCopyIcon() const {
+		return _msgBotKbCopyIcon;
+	}
 	[[nodiscard]] const style::icon &historyFastCommentsIcon() const {
 		return _historyFastCommentsIcon;
 	}
@@ -375,8 +405,17 @@ public:
 	[[nodiscard]] const style::icon &historyFastTranscribeIcon() const {
 		return _historyFastTranscribeIcon;
 	}
+	[[nodiscard]] const style::icon &historyFastTranscribeLock() const {
+		return _historyFastTranscribeLock;
+	}
 	[[nodiscard]] const style::icon &historyGoToOriginalIcon() const {
 		return _historyGoToOriginalIcon;
+	}
+	[[nodiscard]] const style::icon &historyFastCloseIcon() const {
+		return _historyFastCloseIcon;
+	}
+	[[nodiscard]] const style::icon &historyFastMoreIcon() const {
+		return _historyFastMoreIcon;
 	}
 	[[nodiscard]] const style::icon &historyMapPoint() const {
 		return _historyMapPoint;
@@ -485,6 +524,7 @@ private:
 	style::TextPalette _historyPsaForwardPalette;
 	style::TextPalette _imgReplyTextPalette;
 	style::TextPalette _serviceTextPalette;
+	style::TextPalette _priceTagTextPalette;
 	style::icon _historyRepliesInvertedIcon = { Qt::Uninitialized };
 	style::icon _historyViewsInvertedIcon = { Qt::Uninitialized };
 	style::icon _historyViewsSendingIcon = { Qt::Uninitialized };
@@ -498,10 +538,14 @@ private:
 	style::icon _msgBotKbPaymentIcon = { Qt::Uninitialized };
 	style::icon _msgBotKbSwitchPmIcon = { Qt::Uninitialized };
 	style::icon _msgBotKbWebviewIcon = { Qt::Uninitialized };
+	style::icon _msgBotKbCopyIcon = { Qt::Uninitialized };
 	style::icon _historyFastCommentsIcon = { Qt::Uninitialized };
 	style::icon _historyFastShareIcon = { Qt::Uninitialized };
+	style::icon _historyFastMoreIcon = { Qt::Uninitialized };
 	style::icon _historyFastTranscribeIcon = { Qt::Uninitialized };
+	style::icon _historyFastTranscribeLock = { Qt::Uninitialized };
 	style::icon _historyGoToOriginalIcon = { Qt::Uninitialized };
+	style::icon _historyFastCloseIcon = { Qt::Uninitialized };
 	style::icon _historyMapPoint = { Qt::Uninitialized };
 	style::icon _historyMapPointInner = { Qt::Uninitialized };
 	style::icon _youtubeIcon = { Qt::Uninitialized };

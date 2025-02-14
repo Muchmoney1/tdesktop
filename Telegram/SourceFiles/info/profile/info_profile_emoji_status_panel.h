@@ -40,26 +40,33 @@ public:
 	EmojiStatusPanel();
 	~EmojiStatusPanel();
 
-	void setChooseFilter(Fn<bool(DocumentId)> filter);
+	void setChooseFilter(Fn<bool(EmojiStatusId)> filter);
 
 	void show(
 		not_null<Window::SessionController*> controller,
 		not_null<QWidget*> button,
 		Data::CustomEmojiSizeTag animationSizeTag = {});
+	[[nodiscard]] bool hasFocus() const;
 
 	struct Descriptor {
 		not_null<Window::SessionController*> controller;
 		not_null<QWidget*> button;
 		Data::CustomEmojiSizeTag animationSizeTag = {};
-		DocumentId currentBackgroundEmojiId = 0;
+		EmojiStatusId ensureAddedEmojiId;
 		Fn<QColor()> customTextColor;
 		bool backgroundEmojiMode = false;
+		bool channelStatusMode = false;
+		bool withCollectibles = false;
 	};
 	void show(Descriptor &&descriptor);
 	void repaint();
 
-	[[nodiscard]] rpl::producer<DocumentId> backgroundEmojiChosen() const {
-		return _backgroundEmojiChosen.events();
+	struct CustomChosen {
+		EmojiStatusId id;
+		TimeId until = 0;
+	};
+	[[nodiscard]] rpl::producer<CustomChosen> someCustomChosen() const {
+		return _someCustomChosen.events();
 	}
 
 	bool paintBadgeFrame(not_null<Ui::RpWidget*> widget);
@@ -68,22 +75,23 @@ private:
 	void create(const Descriptor &descriptor);
 	[[nodiscard]] bool filter(
 		not_null<Window::SessionController*> controller,
-		DocumentId chosenId) const;
+		EmojiStatusId chosenId) const;
 
 	void startAnimation(
 		not_null<Data::Session*> owner,
 		not_null<Ui::RpWidget*> body,
-		DocumentId statusId,
+		EmojiStatusId statusId,
 		Ui::MessageSendingAnimationFrom from);
 
 	base::unique_qptr<ChatHelpers::TabbedPanel> _panel;
 	Fn<QColor()> _customTextColor;
-	Fn<bool(DocumentId)> _chooseFilter;
+	Fn<bool(EmojiStatusId)> _chooseFilter;
 	QPointer<QWidget> _panelButton;
 	std::unique_ptr<Ui::EmojiFlyAnimation> _animation;
-	rpl::event_stream<DocumentId> _backgroundEmojiChosen;
+	rpl::event_stream<CustomChosen> _someCustomChosen;
 	Data::CustomEmojiSizeTag _animationSizeTag = {};
 	bool _backgroundEmojiMode = false;
+	bool _channelStatusMode = false;
 
 };
 

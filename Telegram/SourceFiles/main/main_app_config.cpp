@@ -38,15 +38,53 @@ void AppConfig::start() {
 	}, _lifetime);
 }
 
-void AppConfig::refresh() {
+int AppConfig::quoteLengthMax() const {
+	return get<int>(u"quote_length_max"_q, 1024);
+}
+
+int AppConfig::stargiftConvertPeriodMax() const {
+	return get<int>(
+		u"stargifts_convert_period_max"_q,
+		_account->mtp().isTestMode() ? 300 : (90 * 86400));
+}
+
+const std::vector<QString> &AppConfig::startRefPrefixes() {
+	if (_startRefPrefixes.empty()) {
+		_startRefPrefixes = get<std::vector<QString>>(
+			u"starref_start_param_prefixes"_q,
+			std::vector<QString>());
+	}
+	return _startRefPrefixes;
+}
+
+bool AppConfig::starrefSetupAllowed() const {
+	return get<bool>(u"starref_program_allowed"_q, false);
+}
+
+bool AppConfig::starrefJoinAllowed() const {
+	return get<bool>(u"starref_connect_allowed"_q, false);
+}
+
+int AppConfig::starrefCommissionMin() const {
+	return get<int>(u"starref_min_commission_permille"_q, 1);
+}
+
+int AppConfig::starrefCommissionMax() const {
+	return get<int>(u"starref_max_commission_permille"_q, 900);
+}
+
+void AppConfig::refresh(bool force) {
 	if (_requestId || !_api) {
+		if (force) {
+			_pendingRefresh = true;
+		}
 		return;
 	}
+	_pendingRefresh = false;
 	_requestId = _api->request(MTPhelp_GetAppConfig(
 		MTP_int(_hash)
 	)).done([=](const MTPhelp_AppConfig &result) {
 		_requestId = 0;
-		refreshDelayed();
 		result.match([&](const MTPDhelp_appConfig &data) {
 			_hash = data.vhash().v;
 
@@ -55,16 +93,25 @@ void AppConfig::refresh() {
 				LOG(("API Error: Unexpected config type."));
 				return;
 			}
+			auto was = ignoredRestrictionReasons();
+
 			_data.clear();
 			for (const auto &element : config.c_jsonObject().vvalue().v) {
 				element.match([&](const MTPDjsonObjectValue &data) {
 					_data.emplace_or_assign(qs(data.vkey()), data.vvalue());
 				});
 			}
-			parseColorIndices();
+			updateIgnoredRestrictionReasons(std::move(was));
+
 			DEBUG_LOG(("getAppConfig result handled."));
 			_refreshed.fire({});
 		}, [](const MTPDhelp_appConfigNotModified &) {});
+
+		if (base::take(_pendingRefresh)) {
+			refresh();
+		} else {
+			refreshDelayed();
+		}
 	}).fail([=] {
 		_requestId = 0;
 		refreshDelayed();
@@ -75,6 +122,24 @@ void AppConfig::refreshDelayed() {
 	base::call_delayed(kRefreshTimeout, _account, [=] {
 		refresh();
 	});
+}
+
+void AppConfig::updateIgnoredRestrictionReasons(std::vector<QString> was) {
+	_ignoreRestrictionReasons = get<std::vector<QString>>(
+		u"ignore_restriction_reasons"_q,
+		std::vector<QString>());
+	ranges::sort(_ignoreRestrictionReasons);
+	if (_ignoreRestrictionReasons != was) {
+		for (const auto &reason : _ignoreRestrictionReasons) {
+			const auto i = ranges::remove(was, reason);
+			if (i != end(was)) {
+				was.erase(i, end(was));
+			} else {
+				was.push_back(reason);
+			}
+		}
+		_ignoreRestrictionChanges.fire(std::move(was));
+	}
 }
 
 rpl::producer<> AppConfig::refreshed() const {
@@ -145,28 +210,22 @@ std::vector<QString> AppConfig::getStringArray(
 	});
 }
 
-std::vector<std::map<QString, QString>> AppConfig::getStringMapArray(
+base::flat_map<QString, QString> AppConfig::getStringMap(
 		const QString &key,
-		std::vector<std::map<QString, QString>> &&fallback) const {
+		base::flat_map<QString, QString> &&fallback) const {
 	return getValue(key, [&](const MTPJSONValue &value) {
-		return value.match([&](const MTPDjsonArray &data) {
-			auto result = std::vector<std::map<QString, QString>>();
+		return value.match([&](const MTPDjsonObject &data) {
+			auto result = base::flat_map<QString, QString>();
 			result.reserve(data.vvalue().v.size());
 			for (const auto &entry : data.vvalue().v) {
-				if (entry.type() != mtpc_jsonObject) {
+				const auto &data = entry.data();
+				const auto &value = data.vvalue();
+				if (value.type() != mtpc_jsonString) {
 					return std::move(fallback);
 				}
-				auto element = std::map<QString, QString>();
-				for (const auto &field : entry.c_jsonObject().vvalue().v) {
-					const auto &data = field.c_jsonObjectValue();
-					if (data.vvalue().type() != mtpc_jsonString) {
-						return std::move(fallback);
-					}
-					element.emplace(
-						qs(data.vkey()),
-						qs(data.vvalue().c_jsonString().vvalue()));
-				}
-				result.push_back(std::move(element));
+				result.emplace(
+					qs(data.vkey()),
+					qs(value.c_jsonString().vvalue()));
 			}
 			return result;
 		}, [&](const auto &data) {
@@ -224,121 +283,10 @@ void AppConfig::dismissSuggestion(const QString &key) {
 	)).send();
 }
 
-void AppConfig::parseColorIndices() {
-	constexpr auto parseColor = [](const MTPJSONValue &color) {
-		if (color.type() != mtpc_jsonString) {
-			LOG(("API Error: Bad type for color element."));
-			return uint32();
-		}
-		const auto value = color.c_jsonString().vvalue().v;
-		if (value.size() != 6) {
-			LOG(("API Error: Bad length for color element: %1"
-				).arg(qs(value)));
-			return uint32();
-		}
-		const auto hex = [](char ch) {
-			return (ch >= 'a' && ch <= 'f')
-				? (ch - 'a' + 10)
-				: (ch >= 'A' && ch <= 'F')
-				? (ch - 'A' + 10)
-				: (ch >= '0' && ch <= '9')
-				? (ch - '0')
-				: 0;
-		};
-		auto result = (uint32(1) << 24);
-		for (auto i = 0; i != 6; ++i) {
-			result |= (uint32(hex(value[i])) << ((5 - i) * 4));
-		}
-		return result;
-	};
-
-	struct ParsedColor {
-		uint8 colorIndex = Ui::kColorIndexCount;
-		std::array<uint32, Ui::kColorPatternsCount> colors;
-
-		explicit operator bool() const {
-			return colorIndex < Ui::kColorIndexCount;
-		}
-	};
-	const auto parseColors = [&](const MTPJSONObjectValue &element) {
-		const auto &data = element.data();
-		if (data.vvalue().type() != mtpc_jsonArray) {
-			LOG(("API Error: Bad value for peer_colors element."));
-			return ParsedColor();
-		}
-		const auto &list = data.vvalue().c_jsonArray().vvalue().v;
-		if (list.empty() || list.size() > Ui::kColorPatternsCount) {
-			LOG(("API Error: Bad count for peer_colors element: %1"
-				).arg(list.size()));
-			return ParsedColor();
-		}
-		const auto index = data.vkey().v.toInt();
-		if (index < Ui::kSimpleColorIndexCount
-			|| index >= Ui::kColorIndexCount) {
-			LOG(("API Error: Bad index for peer_colors element: %1"
-				).arg(qs(data.vkey().v)));
-			return ParsedColor();
-		}
-		auto result = ParsedColor{ .colorIndex = uint8(index) };
-		auto fill = result.colors.data();
-		for (const auto &color : list) {
-			*fill++ = parseColor(color);
-		}
-		return result;
-	};
-	const auto checkColorsObjectType = [&](const MTPJSONValue &value) {
-		if (value.type() != mtpc_jsonObject) {
-			if (value.type() != mtpc_jsonArray
-				|| !value.c_jsonArray().vvalue().v.empty()) {
-				LOG(("API Error: Bad value for [dark_]peer_colors."));
-			}
-			return false;
-		}
-		return true;
-	};
-
-	auto colors = std::make_shared<
-		std::array<Ui::ColorIndexData, Ui::kColorIndexCount>>();
-	getValue(u"peer_colors"_q, [&](const MTPJSONValue &value) {
-		if (!checkColorsObjectType(value)) {
-			return;
-		}
-		for (const auto &element : value.c_jsonObject().vvalue().v) {
-			if (const auto parsed = parseColors(element)) {
-				auto &fields = (*colors)[parsed.colorIndex];
-				fields.dark = fields.light = parsed.colors;
-			}
-		}
-	});
-	getValue(u"dark_peer_colors"_q, [&](const MTPJSONValue &value) {
-		if (!checkColorsObjectType(value)) {
-			return;
-		}
-		for (const auto &element : value.c_jsonObject().vvalue().v) {
-			if (const auto parsed = parseColors(element)) {
-				(*colors)[parsed.colorIndex].dark = parsed.colors;
-			}
-		}
-	});
-
-	if (!_colorIndicesCurrent) {
-		_colorIndicesCurrent = std::make_unique<Ui::ColorIndicesCompressed>(
-			Ui::ColorIndicesCompressed{ std::move(colors) });
-		_colorIndicesChanged.fire({});
-	} else if (*_colorIndicesCurrent->colors != *colors) {
-		_colorIndicesCurrent->colors = std::move(colors);
-		_colorIndicesChanged.fire({});
-	}
-}
-
-auto AppConfig::colorIndicesValue() const
--> rpl::producer<Ui::ColorIndicesCompressed> {
-	return rpl::single(_colorIndicesCurrent
-		? *_colorIndicesCurrent
-		: Ui::ColorIndicesCompressed()
-	) | rpl::then(_colorIndicesChanged.events() | rpl::map([=] {
-		return *_colorIndicesCurrent;
-	}));
+bool AppConfig::newRequirePremiumFree() const {
+	return get<bool>(
+		u"new_noncontact_peers_require_premium_without_ownpremium"_q,
+		false);
 }
 
 } // namespace Main

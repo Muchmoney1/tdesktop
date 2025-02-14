@@ -8,23 +8,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_color_box.h"
 
 #include "apiwrap.h"
+#include "api/api_peer_colors.h"
+#include "api/api_peer_photo.h"
 #include "base/unixtime.h"
+#include "boxes/peers/replace_boost_box.h"
+#include "boxes/background_box.h"
+#include "boxes/stickers_box.h"
 #include "chat_helpers/compose/compose_show.h"
+#include "core/ui_integration.h" // Core::MarkedTextContext.
+#include "data/stickers/data_custom_emoji.h"
+#include "data/stickers/data_stickers.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
-#include "data/stickers/data_custom_emoji.h"
+#include "data/data_document_media.h"
+#include "data/data_emoji_statuses.h"
+#include "data/data_file_origin.h"
 #include "data/data_peer.h"
+#include "data/data_premium_limits.h"
 #include "data/data_session.h"
 #include "data/data_web_page.h"
 #include "history/view/history_view_element.h"
 #include "history/history.h"
 #include "history/history_item.h"
-#include "info/boosts/info_boosts_widget.h"
+#include "info/channel_statistics/boosts/info_boosts_widget.h"
 #include "info/profile/info_profile_emoji_status_panel.h"
 #include "info/info_memento.h"
+#include "iv/iv_data.h"
 #include "lang/lang_keys.h"
-#include "main/main_account.h"
-#include "main/main_app_config.h"
+#include "lottie/lottie_icon.h"
+#include "lottie/lottie_single_player.h"
 #include "main/main_session.h"
 #include "settings/settings_common.h"
 #include "settings/settings_premium.h"
@@ -32,10 +44,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/effects/path_shift_gradient.h"
+#include "ui/effects/premium_graphics.h"
 #include "ui/layers/generic_box.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/buttons.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
+#include "ui/vertical_list.h"
 #include "window/themes/window_theme.h"
 #include "window/section_widget.h"
 #include "window/window_session_controller.h"
@@ -131,6 +146,28 @@ private:
 	std::unique_ptr<Element> _element;
 	Ui::PeerUserpicView _userpic;
 	QPoint _position;
+
+};
+
+class LevelBadge final : public Ui::RpWidget {
+public:
+	LevelBadge(
+		not_null<QWidget*> parent,
+		uint32 level,
+		not_null<Main::Session*> session);
+
+	void setMinimal(bool value);
+
+private:
+	void paintEvent(QPaintEvent *e) override;
+
+	void updateText();
+
+	const uint32 _level;
+	const TextWithEntities _icon;
+	const Core::MarkedTextContext _context;
+	Ui::Text::String _text;
+	bool _minimal = false;
 
 };
 
@@ -274,56 +311,49 @@ PreviewWrap::PreviewWrap(
 	nullptr, // photo
 	nullptr, // document
 	WebPageCollage(),
+	nullptr, // iv
+	nullptr, // stickerSet
+	nullptr, // uniqueGift
 	0, // duration
 	QString(), // author
 	false, // hasLargeMedia
+	false, // photoIsVideoCover
 	0)) // pendingTill
 , _theme(theme)
 , _style(style)
 , _delegate(std::make_unique<PreviewDelegate>(box, _style.get(), [=] {
 	update();
 }))
-, _replyToItem(_history->addNewLocalMessage(
-	_history->nextNonHistoryEntryId(),
-	(MessageFlag::FakeHistoryItem
+, _replyToItem(_history->addNewLocalMessage({
+	.id = _history->nextNonHistoryEntryId(),
+	.flags = (MessageFlag::FakeHistoryItem
 		| MessageFlag::HasFromId
 		| MessageFlag::Post),
-	UserId(), // via
-	FullReplyTo(),
-	base::unixtime::now(), // date
-	_fake->id,
-	QString(), // postAuthor
-	TextWithEntities{ _peer->isSelf()
-		? tr::lng_settings_color_reply(tr::now)
-		: tr::lng_settings_color_reply_channel(tr::now),
-	},
-	MTP_messageMediaEmpty(),
-	HistoryMessageMarkupData(),
-	uint64(0)))
-, _replyItem(_history->addNewLocalMessage(
-	_history->nextNonHistoryEntryId(),
-	(MessageFlag::FakeHistoryItem
+	.from = _fake->id,
+	.date = base::unixtime::now(),
+}, TextWithEntities{ _peer->isSelf()
+	? tr::lng_settings_color_reply(tr::now)
+	: tr::lng_settings_color_reply_channel(tr::now),
+}, MTP_messageMediaEmpty()))
+, _replyItem(_history->addNewLocalMessage({
+	.id = _history->nextNonHistoryEntryId(),
+	.flags = (MessageFlag::FakeHistoryItem
 		| MessageFlag::HasFromId
 		| MessageFlag::HasReplyInfo
 		| MessageFlag::Post),
-	UserId(), // via
-	FullReplyTo{ .messageId = _replyToItem->fullId() },
-	base::unixtime::now(), // date
-	_fake->id,
-	QString(), // postAuthor
-	TextWithEntities{ _peer->isSelf()
-		? tr::lng_settings_color_text(tr::now)
-		: tr::lng_settings_color_text_channel(tr::now),
-	},
-	MTP_messageMediaWebPage(
+	.from = _fake->id,
+	.replyTo = FullReplyTo{.messageId = _replyToItem->fullId() },
+	.date = base::unixtime::now(),
+}, TextWithEntities{ _peer->isSelf()
+	? tr::lng_settings_color_text(tr::now)
+	: tr::lng_settings_color_text_channel(tr::now),
+}, MTP_messageMediaWebPage(
+	MTP_flags(0),
+	MTP_webPagePending(
 		MTP_flags(0),
-		MTP_webPagePending(
-			MTP_flags(0),
-			MTP_long(_webpage->id),
-			MTPstring(),
-			MTP_int(0))),
-	HistoryMessageMarkupData(),
-	uint64(0)))
+		MTP_long(_webpage->id),
+		MTPstring(),
+		MTP_int(0)))))
 , _element(_replyItem->createView(_delegate.get()))
 , _position(0, st::msgMargin.bottom()) {
 	_style->apply(_theme.get());
@@ -425,11 +455,86 @@ HistoryView::Context PreviewDelegate::elementContext() {
 	return HistoryView::Context::AdminLog;
 }
 
+LevelBadge::LevelBadge(
+	not_null<QWidget*> parent,
+	uint32 level,
+	not_null<Main::Session*> session)
+: Ui::RpWidget(parent)
+, _level(level)
+, _icon(Ui::Text::SingleCustomEmoji(
+	session->data().customEmojiManager().registerInternalEmoji(
+		st::settingsLevelBadgeLock,
+		QMargins(0, st::settingsLevelBadgeLockSkip, 0, 0),
+		false)))
+, _context({ .session = session }) {
+	updateText();
+}
+
+void LevelBadge::updateText() {
+	auto text = _icon;
+	text.append(' ');
+	if (!_minimal) {
+		text.append(tr::lng_boost_level(
+			tr::now,
+			lt_count,
+			_level,
+			Ui::Text::WithEntities));
+	} else {
+		text.append(QString::number(_level));
+	}
+	const auto &st = st::settingsPremiumNewBadge.style;
+	_text.setMarkedText(
+		st,
+		text,
+		kMarkupTextOptions,
+		_context);
+	const auto &padding = st::settingsColorSamplePadding;
+	QWidget::resize(
+		_text.maxWidth() + rect::m::sum::h(padding),
+		st.font->height + rect::m::sum::v(padding));
+}
+
+void LevelBadge::setMinimal(bool value) {
+	if ((value != _minimal) && value) {
+		_minimal = value;
+		updateText();
+		update();
+	}
+}
+
+void LevelBadge::paintEvent(QPaintEvent *e) {
+	auto p = QPainter(this);
+	auto hq = PainterHighQualityEnabler(p);
+
+	const auto radius = height() / 2;
+	p.setPen(Qt::NoPen);
+	auto gradient = QLinearGradient(QPointF(0, 0), QPointF(width(), 0));
+	gradient.setStops(Ui::Premium::ButtonGradientStops());
+	p.setBrush(gradient);
+	p.drawRoundedRect(rect(), radius, radius);
+
+	p.setPen(st::premiumButtonFg);
+	p.setBrush(Qt::NoBrush);
+
+	const auto context = Ui::Text::PaintContext{
+		.position = rect::m::pos::tl(st::settingsColorSamplePadding),
+		.outerWidth = width(),
+		.availableWidth = width(),
+	};
+	_text.draw(p, context);
+}
+
+struct SetValues {
+	uint8 colorIndex = 0;
+	DocumentId backgroundEmojiId = 0;
+	EmojiStatusId statusId;
+	TimeId statusUntil = 0;
+	bool statusChanged = false;
+};
 void Set(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<PeerData*> peer,
-		uint8 colorIndex,
-		DocumentId backgroundEmojiId) {
+		SetValues values) {
 	const auto wasIndex = peer->colorIndex();
 	const auto wasEmojiId = peer->backgroundEmojiId();
 
@@ -441,7 +546,7 @@ void Set(
 			peer,
 			UpdateFlag::Color | UpdateFlag::BackgroundEmoji);
 	};
-	setLocal(colorIndex, backgroundEmojiId);
+	setLocal(values.colorIndex, values.backgroundEmojiId);
 
 	const auto done = [=] {
 		show->showToast(peer->isSelf()
@@ -449,8 +554,11 @@ void Set(
 			: tr::lng_settings_color_changed_channel(tr::now));
 	};
 	const auto fail = [=](const MTP::Error &error) {
-		setLocal(wasIndex, wasEmojiId);
-		show->showToast(error.type());
+		const auto type = error.type();
+		if (type != u"CHAT_NOT_MODIFIED"_q) {
+			setLocal(wasIndex, wasEmojiId);
+			show->showToast(type);
+		}
 	};
 	const auto send = [&](auto &&request) {
 		peer->session().api().request(
@@ -458,18 +566,27 @@ void Set(
 		).done(done).fail(fail).send();
 	};
 	if (peer->isSelf()) {
+		using Flag = MTPaccount_UpdateColor::Flag;
 		send(MTPaccount_UpdateColor(
-			MTP_flags(
-				MTPaccount_UpdateColor::Flag::f_background_emoji_id),
-			MTP_int(colorIndex),
-			MTP_long(backgroundEmojiId)));
+			MTP_flags(Flag::f_color | Flag::f_background_emoji_id),
+			MTP_int(values.colorIndex),
+			MTP_long(values.backgroundEmojiId)));
+	} else if (peer->isMegagroup()) {
 	} else if (const auto channel = peer->asChannel()) {
+		using Flag = MTPchannels_UpdateColor::Flag;
 		send(MTPchannels_UpdateColor(
-			MTP_flags(
-				MTPchannels_UpdateColor::Flag::f_background_emoji_id),
+			MTP_flags(Flag::f_color | Flag::f_background_emoji_id),
 			channel->inputChannel,
-			MTP_int(colorIndex),
-			MTP_long(backgroundEmojiId)));
+			MTP_int(values.colorIndex),
+			MTP_long(values.backgroundEmojiId)));
+
+		if (values.statusChanged
+			&& (values.statusId || peer->emojiStatusId())) {
+			peer->owner().emojiStatuses().set(
+				channel,
+				values.statusId,
+				values.statusUntil);
+		}
 	} else {
 		Unexpected("Invalid peer type in Set(colorIndex).");
 	}
@@ -478,13 +595,13 @@ void Set(
 void Apply(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<PeerData*> peer,
-		uint8 colorIndex,
-		DocumentId backgroundEmojiId,
+		SetValues values,
 		Fn<void()> close,
 		Fn<void()> cancel) {
 	const auto session = &peer->session();
-	if (peer->colorIndex() == colorIndex
-		&& peer->backgroundEmojiId() == backgroundEmojiId) {
+	if (peer->colorIndex() == values.colorIndex
+		&& peer->backgroundEmojiId() == values.backgroundEmojiId
+		&& !values.statusChanged) {
 		close();
 	} else if (peer->isSelf() && !session->premium()) {
 		Settings::ShowPremiumPromoToast(
@@ -499,43 +616,49 @@ void Apply(
 			u"name_color"_q);
 		cancel();
 	} else if (peer->isSelf()) {
-		Set(show, peer, colorIndex, backgroundEmojiId);
+		Set(show, peer, values);
 		close();
 	} else {
-		session->api().request(MTPpremium_GetBoostsStatus(
-			peer->input
-		)).done([=](const MTPpremium_BoostsStatus &result) {
-			const auto &data = result.data();
-			const auto required = session->account().appConfig().get<int>(
-				"channel_color_level_min",
-				5);
-			if (data.vlevel().v >= required) {
-				Set(show, peer, colorIndex, backgroundEmojiId);
+		CheckBoostLevel(show, peer, [=](int level) {
+			const auto peerColors = &peer->session().api().peerColors();
+			const auto colorRequired = peer->isMegagroup()
+				? peerColors->requiredGroupLevelFor(
+					peer->id,
+					values.colorIndex)
+				: peerColors->requiredChannelLevelFor(
+					peer->id,
+					values.colorIndex);
+			const auto limits = Data::LevelLimits(&peer->session());
+			const auto iconRequired = values.backgroundEmojiId
+				? limits.channelBgIconLevelMin()
+				: 0;
+			const auto statusRequired = (values.statusChanged
+				&& values.statusId)
+				? limits.channelEmojiStatusLevelMin()
+				: 0;
+			const auto required = std::max({
+				colorRequired,
+				iconRequired,
+				statusRequired,
+			});
+			if (level >= required) {
+				Set(show, peer, values);
 				close();
-				return;
+				return std::optional<Ui::AskBoostReason>();
 			}
-			const auto next = data.vnext_level_boosts().value_or_empty();
-			const auto openStatistics = [=] {
-				if (const auto controller = show->resolveWindow(
-						ChatHelpers::WindowUsage::PremiumPromo)) {
-					controller->showSection(Info::Boosts::Make(peer));
+			const auto reason = [&]() -> Ui::AskBoostReason {
+				if (level < statusRequired) {
+					return { Ui::AskBoostEmojiStatus{
+						statusRequired,
+						peer->isMegagroup()
+					} };
+				} else if (level < iconRequired) {
+					return { Ui::AskBoostChannelColor{ iconRequired } };
 				}
-			};
-			show->show(Box(Ui::AskBoostBox, Ui::AskBoostBoxData{
-				.link = qs(data.vboost_url()),
-				.boost = {
-					.level = data.vlevel().v,
-					.boosts = data.vboosts().v,
-					.thisLevelBoosts = data.vcurrent_level_boosts().v,
-					.nextLevelBoosts = next,
-				},
-				.requiredLevel = required,
-			}, openStatistics, nullptr));
-			cancel();
-		}).fail([=](const MTP::Error &error) {
-			show->showToast(error.type());
-			cancel();
-		}).send();
+				return { Ui::AskBoostChannelColor{ colorRequired } };
+			}();
+			return std::make_optional(reason);
+		}, cancel);
 	}
 }
 
@@ -645,44 +768,49 @@ int ColorSelector::resizeGetHeight(int newWidth) {
 	return (top - skip) + ((count % columns) ? (isize + skip) : 0);
 }
 
+[[nodiscard]] auto ButtonStyleWithAddedPadding(
+		not_null<Ui::RpWidget*> parent,
+		const style::SettingsButton &basicSt,
+		QMargins added) {
+	const auto st = parent->lifetime().make_state<style::SettingsButton>(
+		basicSt);
+	st->padding += added;
+	return st;
+}
+
 [[nodiscard]] object_ptr<Ui::SettingsButton> CreateEmojiIconButton(
 		not_null<Ui::RpWidget*> parent,
 		std::shared_ptr<ChatHelpers::Show> show,
 		std::shared_ptr<Ui::ChatStyle> style,
+		not_null<PeerData*> peer,
 		rpl::producer<uint8> colorIndexValue,
 		rpl::producer<DocumentId> emojiIdValue,
 		Fn<void(DocumentId)> emojiIdChosen) {
-	const auto &basicSt = st::settingsButtonNoIcon;
-	const auto ratio = style::DevicePixelRatio();
-	const auto added = st::normalFont->spacew;
-	const auto emojiSize = Data::FrameSizeFromTag({}) / ratio;
-	const auto noneWidth = added
-		+ st::normalFont->width(tr::lng_settings_color_emoji_off(tr::now));
-	const auto emojiWidth = added + emojiSize;
-	const auto rightPadding = std::max(noneWidth, emojiWidth)
-		+ basicSt.padding.right();
-	const auto st = parent->lifetime().make_state<style::SettingsButton>(
-		basicSt);
-	st->padding.setRight(rightPadding);
-	auto result = CreateButton(
+	const auto button = ButtonStyleWithRightEmoji(
+		parent,
+		tr::lng_settings_color_emoji_off(tr::now));
+	auto result = Settings::CreateButtonWithIcon(
 		parent,
 		tr::lng_settings_color_emoji(),
-		*st,
-		{});
+		*button.st,
+		{ &st::menuBlueIconColorNames });
 	const auto raw = result.data();
 
 	const auto right = Ui::CreateChild<Ui::RpWidget>(raw);
 	right->show();
 
+	using namespace Info::Profile;
 	struct State {
-		Info::Profile::EmojiStatusPanel panel;
+		EmojiStatusPanel panel;
 		std::unique_ptr<Ui::Text::CustomEmoji> emoji;
 		DocumentId emojiId = 0;
 		uint8 index = 0;
 	};
 	const auto state = right->lifetime().make_state<State>();
-	state->panel.backgroundEmojiChosen(
-	) | rpl::start_with_next(emojiIdChosen, raw->lifetime());
+	state->panel.someCustomChosen(
+	) | rpl::start_with_next([=](EmojiStatusPanel::CustomChosen chosen) {
+		emojiIdChosen(chosen.id.documentId);
+	}, raw->lifetime());
 
 	std::move(colorIndexValue) | rpl::start_with_next([=](uint8 index) {
 		state->index = index;
@@ -692,6 +820,7 @@ int ColorSelector::resizeGetHeight(int newWidth) {
 	}, right->lifetime());
 
 	const auto session = &show->session();
+	const auto added = st::normalFont->spacew;
 	std::move(emojiIdValue) | rpl::start_with_next([=](DocumentId emojiId) {
 		state->emojiId = emojiId;
 		state->emoji = emojiId
@@ -700,7 +829,7 @@ int ColorSelector::resizeGetHeight(int newWidth) {
 				[=] { right->update(); })
 			: nullptr;
 		right->resize(
-			(emojiId ? emojiWidth : noneWidth) + added,
+			(emojiId ? button.emojiWidth : button.noneWidth) + button.added,
 			right->height());
 		right->update();
 	}, right->lifetime());
@@ -711,7 +840,7 @@ int ColorSelector::resizeGetHeight(int newWidth) {
 	) | rpl::start_with_next([=](QSize outer, int width) {
 		right->resize(width, outer.height());
 		const auto skip = st::settingsButton.padding.right();
-		right->moveToRight(skip - added, 0, outer.width());
+		right->moveToRight(skip - button.added, 0, outer.width());
 	}, right->lifetime());
 
 	right->paintRequest(
@@ -725,7 +854,7 @@ int ColorSelector::resizeGetHeight(int newWidth) {
 			const auto colors = style->coloredValues(false, state->index);
 			state->emoji->paint(p, {
 				.textColor = colors.name,
-				.position = QPoint(added, (height - emojiSize) / 2),
+				.position = QPoint(added, (height - button.emojiWidth) / 2),
 				.internal = {
 					.forceFirstFrame = true,
 				},
@@ -744,23 +873,298 @@ int ColorSelector::resizeGetHeight(int newWidth) {
 		const auto customTextColor = [=] {
 			return style->coloredValues(false, state->index).name;
 		};
-		const auto controller = show->resolveWindow(
-			ChatHelpers::WindowUsage::PremiumPromo);
+		const auto controller = show->resolveWindow();
 		if (controller) {
 			state->panel.show({
 				.controller = controller,
 				.button = right,
-				.currentBackgroundEmojiId = state->emojiId,
+				.ensureAddedEmojiId = { state->emojiId },
 				.customTextColor = customTextColor,
 				.backgroundEmojiMode = true,
 			});
 		}
 	});
 
+	if (const auto channel = peer->asChannel()) {
+		AddLevelBadge(
+			Data::LevelLimits(&channel->session()).channelBgIconLevelMin(),
+			raw,
+			right,
+			channel,
+			button.st->padding,
+			tr::lng_settings_color_emoji());
+	}
+
+	return result;
+}
+
+[[nodiscard]] object_ptr<Ui::SettingsButton> CreateEmojiStatusButton(
+		not_null<Ui::RpWidget*> parent,
+		std::shared_ptr<ChatHelpers::Show> show,
+		not_null<ChannelData*> channel,
+		rpl::producer<EmojiStatusId> statusIdValue,
+		Fn<void(EmojiStatusId,TimeId)> statusIdChosen,
+		bool group) {
+	const auto button = ButtonStyleWithRightEmoji(
+		parent,
+		tr::lng_settings_color_emoji_off(tr::now));
+	const auto &phrase = group
+		? tr::lng_edit_channel_status_group
+		: tr::lng_edit_channel_status;
+	auto result = Settings::CreateButtonWithIcon(
+		parent,
+		phrase(),
+		*button.st,
+		{ &st::menuBlueIconEmojiStatus });
+	const auto raw = result.data();
+
+	const auto right = Ui::CreateChild<Ui::RpWidget>(raw);
+	right->show();
+
+	using namespace Info::Profile;
+	struct State {
+		EmojiStatusPanel panel;
+		std::unique_ptr<Ui::Text::CustomEmoji> emoji;
+		EmojiStatusId statusId;
+	};
+	const auto state = right->lifetime().make_state<State>();
+	state->panel.someCustomChosen(
+	) | rpl::start_with_next([=](EmojiStatusPanel::CustomChosen chosen) {
+		statusIdChosen({ chosen.id }, chosen.until);
+	}, raw->lifetime());
+
+	const auto session = &show->session();
+	std::move(statusIdValue) | rpl::start_with_next([=](EmojiStatusId id) {
+		state->statusId = id;
+		state->emoji = id
+			? session->data().customEmojiManager().create(
+				Data::EmojiStatusCustomId(id),
+				[=] { right->update(); })
+			: nullptr;
+		right->resize(
+			(id ? button.emojiWidth : button.noneWidth) + button.added,
+			right->height());
+		right->update();
+	}, right->lifetime());
+
+	rpl::combine(
+		raw->sizeValue(),
+		right->widthValue()
+	) | rpl::start_with_next([=](QSize outer, int width) {
+		right->resize(width, outer.height());
+		const auto skip = st::settingsButton.padding.right();
+		right->moveToRight(skip - button.added, 0, outer.width());
+	}, right->lifetime());
+
+	right->paintRequest(
+	) | rpl::start_with_next([=] {
+		if (state->panel.paintBadgeFrame(right)) {
+			return;
+		}
+		auto p = QPainter(right);
+		const auto height = right->height();
+		if (state->emoji) {
+			state->emoji->paint(p, {
+				.textColor = anim::color(
+					st::stickerPanPremium1,
+					st::stickerPanPremium2,
+					0.5),
+				.position = QPoint(
+					button.added,
+					(height - button.emojiWidth) / 2),
+			});
+		} else {
+			const auto &font = st::normalFont;
+			p.setFont(font);
+			p.setPen(st::windowActiveTextFg);
+			p.drawText(
+				QPoint(
+					button.added,
+					(height - font->height) / 2 + font->ascent),
+				tr::lng_settings_color_emoji_off(tr::now));
+		}
+	}, right->lifetime());
+
+	raw->setClickedCallback([=] {
+		const auto controller = show->resolveWindow();
+		if (controller) {
+			state->panel.show({
+				.controller = controller,
+				.button = right,
+				.ensureAddedEmojiId = { state->statusId },
+				.channelStatusMode = true,
+			});
+		}
+	});
+
+	const auto limits = Data::LevelLimits(&channel->session());
+	AddLevelBadge(
+		(group
+			? limits.groupEmojiStatusLevelMin()
+			: limits.channelEmojiStatusLevelMin()),
+		raw,
+		right,
+		channel,
+		button.st->padding,
+		phrase());
+
+	return result;
+}
+
+[[nodiscard]] object_ptr<Ui::SettingsButton> CreateEmojiPackButton(
+		not_null<Ui::RpWidget*> parent,
+		std::shared_ptr<ChatHelpers::Show> show,
+		not_null<ChannelData*> channel) {
+	Expects(channel->mgInfo != nullptr);
+
+	const auto button = ButtonStyleWithRightEmoji(
+		parent,
+		tr::lng_settings_color_emoji_off(tr::now));
+	auto result = Settings::CreateButtonWithIcon(
+		parent,
+		tr::lng_group_emoji(),
+		*button.st,
+		{ &st::menuBlueIconEmojiPack });
+	const auto raw = result.data();
+
+	struct State {
+		DocumentData *icon = nullptr;
+		std::unique_ptr<Ui::Text::CustomEmoji> custom;
+		QImage cache;
+	};
+	const auto state = parent->lifetime().make_state<State>();
+
+	const auto right = Ui::CreateChild<Ui::RpWidget>(raw);
+	right->show();
+	right->resize(
+		button.emojiWidth + button.added,
+		right->height());
+
+	rpl::combine(
+		raw->sizeValue(),
+		right->widthValue()
+	) | rpl::start_with_next([=](QSize outer, int width) {
+		right->resize(width, outer.height());
+		const auto skip = st::settingsButton.padding.right();
+		right->moveToRight(skip - button.added, 0, outer.width());
+	}, right->lifetime());
+
+	right->paintRequest(
+	) | rpl::filter([=] {
+		return state->icon != nullptr;
+	}) | rpl::start_with_next([=] {
+		auto p = QPainter(right);
+		const auto x = button.added;
+		const auto y = (right->height() - button.emojiWidth) / 2;
+		const auto active = right->window()->isActiveWindow();
+		if (const auto emoji = state->icon) {
+			if (!state->custom
+				&& emoji->sticker()
+				&& emoji->sticker()->setType == Data::StickersType::Emoji) {
+				auto &manager = emoji->owner().customEmojiManager();
+				state->custom = manager.create(
+					emoji->id,
+					[=] { right->update(); },
+					{});
+			}
+			if (state->custom) {
+				state->custom->paint(p, Ui::Text::CustomEmoji::Context{
+					.textColor = st::windowFg->c,
+					.now = crl::now(),
+					.position = { x, y },
+					.paused = !active,
+				});
+			}
+		}
+	}, right->lifetime());
+
+	raw->setClickedCallback([=] {
+		const auto isEmoji = true;
+		show->showBox(Box<StickersBox>(show, channel, isEmoji));
+	});
+
+	channel->session().changes().peerFlagsValue(
+		channel,
+		Data::PeerUpdate::Flag::EmojiSet
+	) | rpl::map([=]() -> rpl::producer<DocumentData*> {
+		const auto id = channel->mgInfo->emojiSet.id;
+		if (!id) {
+			return rpl::single<DocumentData*>(nullptr);
+		}
+		const auto sets = &channel->owner().stickers().sets();
+		auto wrapLoaded = [=](Data::StickersSets::const_iterator it) {
+			return it->second->lookupThumbnailDocument();
+		};
+		const auto it = sets->find(id);
+		if (it != sets->cend()
+			&& !(it->second->flags & Data::StickersSetFlag::NotLoaded)) {
+			return rpl::single(wrapLoaded(it));
+		}
+		return rpl::single<DocumentData*>(
+			nullptr
+		) | rpl::then(channel->owner().stickers().updated(
+			Data::StickersType::Emoji
+		) | rpl::filter([=] {
+			const auto it = sets->find(id);
+			return (it != sets->cend())
+				&& !(it->second->flags & Data::StickersSetFlag::NotLoaded);
+		}) | rpl::map([=] {
+			return wrapLoaded(sets->find(id));
+		}));
+	}) | rpl::flatten_latest(
+	) | rpl::start_with_next([=](DocumentData *icon) {
+		if (state->icon != icon) {
+			state->icon = icon;
+			state->custom = nullptr;
+			right->update();
+		}
+	}, right->lifetime());
+
+	AddLevelBadge(
+		Data::LevelLimits(&channel->session()).groupEmojiStickersLevelMin(),
+		raw,
+		right,
+		channel,
+		button.st->padding,
+		tr::lng_group_emoji());
+
 	return result;
 }
 
 } // namespace
+
+void AddLevelBadge(
+		int level,
+		not_null<Ui::SettingsButton*> button,
+		Ui::RpWidget *right,
+		not_null<ChannelData*> channel,
+		const QMargins &padding,
+		rpl::producer<QString> text) {
+	if (channel->levelHint() >= level) {
+		return;
+	}
+	const auto badge = Ui::CreateChild<LevelBadge>(
+		button.get(),
+		level,
+		&channel->session());
+	badge->show();
+	const auto sampleLeft = st::settingsColorSamplePadding.left();
+	const auto badgeLeft = padding.left() + sampleLeft;
+	rpl::combine(
+		button->sizeValue(),
+		std::move(text)
+	) | rpl::start_with_next([=](const QSize &s, const QString &) {
+		if (s.isNull()) {
+			return;
+		}
+		badge->moveToLeft(
+			button->fullTextWidth() + badgeLeft,
+			(s.height() - badge->height()) / 2);
+		const auto rightEdge = right ? right->pos().x() : button->width();
+		badge->setMinimal((rect::right(badge) + sampleLeft) > rightEdge);
+		badge->setVisible((rect::right(badge) + sampleLeft) < rightEdge);
+	}, badge->lifetime());
+}
 
 void EditPeerColorBox(
 		not_null<Ui::GenericBox*> box,
@@ -768,80 +1172,182 @@ void EditPeerColorBox(
 		not_null<PeerData*> peer,
 		std::shared_ptr<Ui::ChatStyle> style,
 		std::shared_ptr<Ui::ChatTheme> theme) {
-	box->setTitle(tr::lng_settings_color_title());
+	const auto group = peer->isMegagroup();
+	const auto container = box->verticalLayout();
+
+	box->setTitle(peer->isSelf()
+		? tr::lng_settings_color_title()
+		: tr::lng_edit_channel_color());
 	box->setWidth(st::boxWideWidth);
 
 	struct State {
 		rpl::variable<uint8> index;
 		rpl::variable<DocumentId> emojiId;
+		rpl::variable<EmojiStatusId> statusId;
+		TimeId statusUntil = 0;
+		bool statusChanged = false;
 		bool changing = false;
 		bool applying = false;
 	};
 	const auto state = box->lifetime().make_state<State>();
 	state->index = peer->colorIndex();
 	state->emojiId = peer->backgroundEmojiId();
-
-	box->addRow(object_ptr<PreviewWrap>(
-		box,
-		style,
-		theme,
-		peer,
-		state->index.value(),
-		state->emojiId.value()
-	), {});
-
-	const auto appConfig = &peer->session().account().appConfig();
-	auto indices = rpl::single(
-		rpl::empty
-	) | rpl::then(
-		appConfig->refreshed()
-	) | rpl::map([=] {
-		const auto list = appConfig->get<std::vector<int>>(
-			"peer_colors_available",
-			{ 0, 1, 2, 3, 4, 5, 6 });
-		return list | ranges::views::transform([](int i) {
-			return uint8(i);
-		}) | ranges::to_vector;
-	});
-	const auto margin = st::settingsColorRadioMargin;
-	const auto skip = st::settingsColorRadioSkip;
-	box->addRow(
-		object_ptr<ColorSelector>(
+	state->statusId = peer->emojiStatusId();
+	if (group) {
+		Settings::AddDividerTextWithLottie(box->verticalLayout(), {
+			.lottie = u"palette"_q,
+			.lottieSize = st::settingsCloudPasswordIconSize,
+			.lottieMargins = st::peerAppearanceIconPadding,
+			.showFinished = box->showFinishes(),
+			.about = tr::lng_boost_group_about(Ui::Text::WithEntities),
+			.aboutMargins = st::peerAppearanceCoverLabelMargin,
+		});
+	} else {
+		box->addRow(object_ptr<PreviewWrap>(
 			box,
 			style,
-			std::move(indices),
-			state->index.current(),
-			[=](uint8 index) { state->index = index; }),
-		{ margin, skip, margin, skip });
+			theme,
+			peer,
+			state->index.value(),
+			state->emojiId.value()
+		), {});
 
-	const auto container = box->verticalLayout();
-	AddDividerText(container, peer->isSelf()
-		? tr::lng_settings_color_about()
-		: tr::lng_settings_color_about_channel());
+		auto indices = peer->session().api().peerColors().suggestedValue();
+		const auto margin = st::settingsColorRadioMargin;
+		const auto skip = st::settingsColorRadioSkip;
+		box->addRow(
+			object_ptr<ColorSelector>(
+				box,
+				style,
+				std::move(indices),
+				state->index.current(),
+				[=](uint8 index) { state->index = index; }),
+			{ margin, skip, margin, skip });
 
-	AddSkip(container, st::settingsColorSampleSkip);
+		Ui::AddDividerText(
+			container,
+			(peer->isSelf()
+				? tr::lng_settings_color_about()
+				: tr::lng_settings_color_about_channel()),
+			st::peerAppearanceDividerTextMargin);
 
-	container->add(CreateEmojiIconButton(
-		container,
-		show,
-		style,
-		state->index.value(),
-		state->emojiId.value(),
-		[=](DocumentId id) { state->emojiId = id; }));
+		Ui::AddSkip(container, st::settingsColorSampleSkip);
 
-	AddSkip(container, st::settingsColorSampleSkip);
-	AddDividerText(container, peer->isSelf()
-		? tr::lng_settings_color_emoji_about()
-		: tr::lng_settings_color_emoji_about_channel());
+		container->add(CreateEmojiIconButton(
+			container,
+			show,
+			style,
+			peer,
+			state->index.value(),
+			state->emojiId.value(),
+			[=](DocumentId id) { state->emojiId = id; }));
+
+		Ui::AddSkip(container, st::settingsColorSampleSkip);
+		Ui::AddDividerText(
+			container,
+			(peer->isSelf()
+				? tr::lng_settings_color_emoji_about()
+				: tr::lng_settings_color_emoji_about_channel()),
+			st::peerAppearanceDividerTextMargin);
+	}
+
+	if (const auto channel = peer->asChannel()) {
+		Ui::AddSkip(container, st::settingsColorSampleSkip);
+		const auto &phrase = group
+			? tr::lng_edit_channel_wallpaper_group
+			: tr::lng_edit_channel_wallpaper;
+		const auto button = Settings::AddButtonWithIcon(
+			container,
+			phrase(),
+			st::peerAppearanceButton,
+			{ &st::menuBlueIconWallpaper }
+		);
+		button->setClickedCallback([=] {
+			if (const auto strong = show->resolveWindow()) {
+				show->show(Box<BackgroundBox>(strong, channel));
+			}
+		});
+
+		{
+			const auto limits = Data::LevelLimits(&channel->session());
+			AddLevelBadge(
+				group
+					? limits.groupCustomWallpaperLevelMin()
+					: limits.channelCustomWallpaperLevelMin(),
+				button,
+				nullptr,
+				channel,
+				st::peerAppearanceButton.padding,
+				phrase());
+		}
+
+		Ui::AddSkip(container, st::settingsColorSampleSkip);
+		Ui::AddDividerText(
+			container,
+			(group
+				? tr::lng_edit_channel_wallpaper_about_group()
+				: tr::lng_edit_channel_wallpaper_about()),
+			st::peerAppearanceDividerTextMargin);
+
+		if (group) {
+			Ui::AddSkip(container, st::settingsColorSampleSkip);
+
+			container->add(CreateEmojiPackButton(
+				container,
+				show,
+				channel));
+
+			Ui::AddSkip(container, st::settingsColorSampleSkip);
+			Ui::AddDividerText(
+				container,
+				tr::lng_group_emoji_description(),
+				st::peerAppearanceDividerTextMargin);
+		}
+
+		// Preload exceptions list.
+		const auto peerPhoto = &channel->session().api().peerPhoto();
+		[[maybe_unused]] auto list = peerPhoto->emojiListValue(
+			Api::PeerPhoto::EmojiListType::NoChannelStatus
+		);
+
+		const auto statuses = &channel->owner().emojiStatuses();
+		statuses->refreshChannelDefault();
+		statuses->refreshChannelColored();
+
+		Ui::AddSkip(container, st::settingsColorSampleSkip);
+		container->add(CreateEmojiStatusButton(
+			container,
+			show,
+			channel,
+			state->statusId.value(),
+			[=](EmojiStatusId id, TimeId until) {
+				state->statusId = id;
+				state->statusUntil = until;
+				state->statusChanged = true;
+			},
+			group));
+
+		Ui::AddSkip(container, st::settingsColorSampleSkip);
+		Ui::AddDividerText(
+			container,
+			(group
+				? tr::lng_edit_channel_status_about_group()
+				: tr::lng_edit_channel_status_about()),
+			st::peerAppearanceDividerTextMargin);
+	}
 
 	box->addButton(tr::lng_settings_apply(), [=] {
 		if (state->applying) {
 			return;
 		}
 		state->applying = true;
-		const auto index = state->index.current();
-		const auto emojiId = state->emojiId.current();
-		Apply(show, peer, index, emojiId, crl::guard(box, [=] {
+		Apply(show, peer, {
+			state->index.current(),
+			state->emojiId.current(),
+			state->statusId.current(),
+			state->statusUntil,
+			state->statusChanged,
+		}, crl::guard(box, [=] {
 			box->closeBox();
 		}), crl::guard(box, [=] {
 			state->applying = false;
@@ -852,18 +1358,11 @@ void EditPeerColorBox(
 	});
 }
 
-void AddPeerColorButton(
-		not_null<Ui::VerticalLayout*> container,
-		std::shared_ptr<ChatHelpers::Show> show,
-		not_null<PeerData*> peer) {
-	const auto button = AddButton(
-		container,
-		(peer->isSelf()
-			? tr::lng_settings_theme_name_color()
-			: tr::lng_edit_channel_color()),
-		st::settingsColorButton,
-		{ &st::menuIconChangeColors });
-
+void SetupPeerColorSample(
+		not_null<Button*> button,
+		not_null<PeerData*> peer,
+		rpl::producer<QString> label,
+		std::shared_ptr<Ui::ChatStyle> style) {
 	auto colorIndexValue = peer->session().changes().peerFlagsValue(
 		peer,
 		Data::PeerUpdate::Flag::Color
@@ -871,12 +1370,6 @@ void AddPeerColorButton(
 		return peer->colorIndex();
 	});
 	const auto name = peer->shortName();
-
-	const auto style = std::make_shared<Ui::ChatStyle>(
-		peer->session().colorIndicesValue());
-	const auto theme = std::shared_ptr<Ui::ChatTheme>(
-		Window::Theme::DefaultChatThemeOn(button->lifetime()));
-	style->apply(theme.get());
 
 	const auto sample = Ui::CreateChild<ColorSample>(
 		button.get(),
@@ -887,7 +1380,7 @@ void AddPeerColorButton(
 
 	rpl::combine(
 		button->widthValue(),
-		tr::lng_settings_theme_name_color(),
+		rpl::duplicate(label),
 		rpl::duplicate(colorIndexValue)
 	) | rpl::start_with_next([=](
 			int width,
@@ -929,8 +1422,90 @@ void AddPeerColorButton(
 	}, sample->lifetime());
 
 	sample->setAttribute(Qt::WA_TransparentForMouseEvents);
+}
+
+void AddPeerColorButton(
+		not_null<Ui::VerticalLayout*> container,
+		std::shared_ptr<ChatHelpers::Show> show,
+		not_null<PeerData*> peer,
+		const style::SettingsButton &st) {
+	auto label = peer->isSelf()
+		? tr::lng_settings_theme_name_color()
+		: tr::lng_edit_channel_color();
+	const auto button = AddButtonWithIcon(
+		container,
+		rpl::duplicate(label),
+		st,
+		{ &st::menuIconChangeColors });
+
+	const auto style = std::make_shared<Ui::ChatStyle>(
+		peer->session().colorIndicesValue());
+	const auto theme = std::shared_ptr<Ui::ChatTheme>(
+		Window::Theme::DefaultChatThemeOn(button->lifetime()));
+	style->apply(theme.get());
+
+	if (!peer->isMegagroup()) {
+		SetupPeerColorSample(button, peer, rpl::duplicate(label), style);
+	}
 
 	button->setClickedCallback([=] {
 		show->show(Box(EditPeerColorBox, show, peer, style, theme));
 	});
+}
+
+void CheckBoostLevel(
+		std::shared_ptr<ChatHelpers::Show> show,
+		not_null<PeerData*> peer,
+		Fn<std::optional<Ui::AskBoostReason>(int level)> askMore,
+		Fn<void()> cancel) {
+	peer->session().api().request(MTPpremium_GetBoostsStatus(
+		peer->input
+	)).done([=](const MTPpremium_BoostsStatus &result) {
+		const auto &data = result.data();
+		if (const auto channel = peer->asChannel()) {
+			channel->updateLevelHint(data.vlevel().v);
+		}
+		const auto reason = askMore(data.vlevel().v);
+		if (!reason) {
+			return;
+		}
+		const auto openStatistics = [=] {
+			if (const auto controller = show->resolveWindow()) {
+				controller->showSection(Info::Boosts::Make(peer));
+			}
+		};
+		auto counters = ParseBoostCounters(result);
+		counters.mine = 0; // Don't show current level as just-reached.
+		show->show(Box(Ui::AskBoostBox, Ui::AskBoostBoxData{
+			.link = qs(data.vboost_url()),
+			.boost = counters,
+			.reason = *reason,
+		}, openStatistics, nullptr));
+		cancel();
+	}).fail([=](const MTP::Error &error) {
+		show->showToast(error.type());
+		cancel();
+	}).send();
+}
+
+ButtonWithEmoji ButtonStyleWithRightEmoji(
+		not_null<Ui::RpWidget*> parent,
+		const QString &noneString,
+		const style::SettingsButton &parentSt) {
+	const auto ratio = style::DevicePixelRatio();
+	const auto emojiWidth = Data::FrameSizeFromTag({}) / ratio;
+
+	const auto noneWidth = st::normalFont->width(noneString);
+
+	const auto added = st::normalFont->spacew;
+	const auto rightAdded = std::max(noneWidth, emojiWidth);
+	return {
+		.st = ButtonStyleWithAddedPadding(
+			parent,
+			parentSt,
+			QMargins(0, 0, added + rightAdded, 0)),
+		.emojiWidth = emojiWidth,
+		.noneWidth = noneWidth,
+		.added = added,
+	};
 }

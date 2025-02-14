@@ -27,7 +27,6 @@ public:
 	PointDetailsWidget(
 		not_null<Ui::RpWidget*> parent,
 		const Data::StatisticalChart &chartData,
-		float64 maxAbsoluteValue,
 		bool zoomEnabled);
 
 	[[nodiscard]] int xIndex() const;
@@ -46,9 +45,8 @@ private:
 	const Data::StatisticalChart &_chartData;
 	const style::TextStyle &_textStyle;
 	const style::TextStyle &_headerStyle;
-	const QString _longFormat;
-	const QString _shortFormat;
 	Ui::Text::String _header;
+	QImage _valueIcon;
 
 	void invalidateCache();
 

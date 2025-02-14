@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/shadow.h"
 #include "ui/cached_round_corners.h"
 #include "ui/painter.h"
+#include "ui/ui_utility.h"
 #include "window/themes/window_theme.h"
 #include "window/section_widget.h"
 #include "window/window_controller.h"
@@ -132,16 +133,11 @@ private:
 
 };
 
-[[nodiscard]] bool UseSeparateWindow() {
-	return !Platform::IsWayland()
-		&& Ui::Platform::TranslucentWindowsSupported();
-}
-
 Preview::Preview(QWidget *slider, rpl::producer<QImage> userpic)
 : _widget(slider->window())
 , _slider(slider)
 , _ratio(style::DevicePixelRatio())
-, _window(UseSeparateWindow()) {
+, _window(Ui::Platform::TranslucentWindowsSupported()) {
 	std::move(userpic) | rpl::start_with_next([=](QImage &&userpic) {
 		_userpicOriginal = std::move(userpic);
 		if (!_userpicImage.isNull()) {
@@ -169,12 +165,13 @@ void Preview::watchParent() {
 }
 
 void Preview::reparent() {
-	if (_widget.window() == &_widget) {
+	const auto parent = _widget.parentWidget();
+	if (!parent) {
 		// macOS just removes parenting for a _window.
 		_parentWatcher = nullptr;
 		return;
 	}
-	_widget.setParent(_widget.window());
+	_widget.setParent(parent->window(), _widget.windowFlags());
 	if (_shown) {
 		_widget.show();
 		updateGlobalPosition();
@@ -192,7 +189,7 @@ void Preview::toggle(ScalePreviewShow show, int scale, int sliderX) {
 	updateToScale(scale);
 	updateGlobalPosition(sliderX);
 	if (_widget.isHidden()) {
-		Ui::Platform::UpdateOverlayed(&_widget);
+		Ui::ForceFullRepaintSync(&_widget);
 	}
 	toggleShown(true);
 }

@@ -10,23 +10,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class PeerData;
 
 namespace Ui {
+class SettingsButton;
+template <typename Widget>
+class SlideWrap;
 class VerticalLayout;
 } // namespace Ui
 
 namespace Data {
+struct Boost;
 struct BoostsListSlice;
+struct CreditsHistoryEntry;
+struct CreditsStatusSlice;
 struct PublicForwardsSlice;
+struct RecentPostId;
+struct SubscriptionEntry;
 struct SupergroupStatistics;
 } // namespace Data
+
+namespace Main {
+class SessionShow;
+} // namespace Main
 
 namespace Info::Statistics {
 
 void AddPublicForwards(
 	const Data::PublicForwardsSlice &firstSlice,
 	not_null<Ui::VerticalLayout*> container,
-	Fn<void(FullMsgId)> showPeerHistory,
+	Fn<void(Data::RecentPostId)> requestShow,
 	not_null<PeerData*> peer,
-	FullMsgId contextId);
+	Data::RecentPostId contextId);
 
 void AddMembersList(
 	Data::SupergroupStatistics data,
@@ -38,8 +50,25 @@ void AddMembersList(
 void AddBoostsList(
 	const Data::BoostsListSlice &firstSlice,
 	not_null<Ui::VerticalLayout*> container,
-	Fn<void(not_null<PeerData*>)> showPeerInfo,
+	Fn<void(const Data::Boost &)> boostClickedCallback,
 	not_null<PeerData*> peer,
+	rpl::producer<QString> title);
+
+using Clicked = Fn<void(
+	const Data::CreditsHistoryEntry &,
+	const Data::SubscriptionEntry &)>;
+void AddCreditsHistoryList(
+	std::shared_ptr<Main::SessionShow> show,
+	const Data::CreditsStatusSlice &firstSlice,
+	not_null<Ui::VerticalLayout*> container,
+	Clicked entryClickedCallback,
+	not_null<PeerData*> peer,
+	bool in,
+	bool out,
+	bool subscription = false);
+
+[[nodiscard]] not_null<Ui::SlideWrap<Ui::SettingsButton>*> AddShowMoreButton(
+	not_null<Ui::VerticalLayout*> container,
 	rpl::producer<QString> title);
 
 } // namespace Info::Statistics

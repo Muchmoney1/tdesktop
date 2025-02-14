@@ -16,8 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_settings.h"
 #include "styles/style_premium.h"
 
-#include <QtCore/QFile>
-
 namespace Ui::Premium {
 namespace {
 
@@ -25,71 +23,22 @@ constexpr auto kBodyAnimationPart = 0.90;
 constexpr auto kTitleAdditionalScale = 0.15;
 constexpr auto kMinAcceptableContrast = 4.5; // 1.14;
 
+[[nodiscard]] QImage ScaleTo(QImage image) {
+	using namespace style;
+	const auto size = image.size();
+	const auto scale = DevicePixelRatio() * Scale() / 300.;
+	const auto scaled = QSize(
+		int(base::SafeRound(size.width() * scale)),
+		int(base::SafeRound(size.height() * scale)));
+	image = image.scaled(
+		scaled,
+		Qt::IgnoreAspectRatio,
+		Qt::SmoothTransformation);
+	image.setDevicePixelRatio(DevicePixelRatio());
+	return image;
+}
+
 } // namespace
-
-QString Svg() {
-	return u":/gui/icons/settings/star.svg"_q;
-}
-
-QByteArray ColorizedSvg() {
-	auto f = QFile(Svg());
-	if (!f.open(QIODevice::ReadOnly)) {
-		return QByteArray();
-	}
-	auto content = QString::fromUtf8(f.readAll());
-	auto stops = [] {
-		auto s = QString();
-		for (const auto &stop : Ui::Premium::ButtonGradientStops()) {
-			s += QString("<stop offset='%1' stop-color='%2'/>")
-				.arg(QString::number(stop.first), stop.second.name());
-		}
-		return s;
-	}();
-	const auto color = QString("<linearGradient id='Gradient2' "
-		"x1='%1' x2='%2' y1='%3' y2='%4'>%5</linearGradient>")
-		.arg(0)
-		.arg(1)
-		.arg(1)
-		.arg(0)
-		.arg(std::move(stops));
-	content.replace(u"gradientPlaceholder"_q, color);
-	content.replace(u"#fff"_q, u"url(#Gradient2)"_q);
-	f.close();
-	return content.toUtf8();
-}
-
-QImage GenerateStarForLightTopBar(QRectF rect) {
-	auto svg = QSvgRenderer(Ui::Premium::Svg());
-
-	const auto size = rect.size().toSize();
-	auto frame = QImage(
-		size * style::DevicePixelRatio(),
-		QImage::Format_ARGB32_Premultiplied);
-	frame.setDevicePixelRatio(style::DevicePixelRatio());
-
-	auto mask = frame;
-	mask.fill(Qt::transparent);
-	{
-		auto p = QPainter(&mask);
-		auto gradient = QLinearGradient(
-			0,
-			size.height(),
-			size.width(),
-			0);
-		gradient.setStops(Ui::Premium::ButtonGradientStops());
-		p.setPen(Qt::NoPen);
-		p.setBrush(gradient);
-		p.drawRect(0, 0, size.width(), size.height());
-	}
-	frame.fill(Qt::transparent);
-	{
-		auto q = QPainter(&frame);
-		svg.render(&q, QRect(QPoint(), size));
-		q.setCompositionMode(QPainter::CompositionMode_SourceIn);
-		q.drawImage(0, 0, mask);
-	}
-	return frame;
-}
 
 TopBarAbstract::TopBarAbstract(
 	QWidget *parent,
@@ -120,8 +69,8 @@ void TopBarAbstract::paintEdges(QPainter &p, const QBrush &brush) const {
 }
 
 void TopBarAbstract::paintEdges(QPainter &p) const {
-	paintEdges(p, st::boxBg);
-	if (isDark()) {
+	paintEdges(p, st().bg);
+	if (isDark() && st().additionalShadowForDarkThemes) {
 		paintEdges(p, st::shadowFg);
 		paintEdges(p, st::shadowFg);
 	}
@@ -144,7 +93,7 @@ bool TopBarAbstract::isDark() const {
 
 void TopBarAbstract::computeIsDark() {
 	const auto contrast = CountContrast(
-		st::boxBg->c,
+		st().bg->c,
 		st::premiumButtonFg->c);
 	_isDark = (contrast > kMinAcceptableContrast);
 }
@@ -152,31 +101,29 @@ void TopBarAbstract::computeIsDark() {
 TopBar::TopBar(
 	not_null<QWidget*> parent,
 	const style::PremiumCover &st,
-	Fn<QVariant()> clickContextOther,
-	rpl::producer<QString> title,
-	rpl::producer<TextWithEntities> about,
-	bool light)
+	TopBarDescriptor &&descriptor)
 : TopBarAbstract(parent, st)
-, _light(light)
+, _light(descriptor.light)
+, _logo(descriptor.logo)
 , _titleFont(st.titleFont)
 , _titlePadding(st.titlePadding)
-, _about(this, std::move(about), st.about)
-, _ministars(this) {
+, _about(this, std::move(descriptor.about), st.about)
+, _ministars(this, descriptor.optimizeMinistars, MiniStars::Type::BiStars) {
 	std::move(
-		title
+		descriptor.title
 	) | rpl::start_with_next([=](QString text) {
 		_titlePath = QPainterPath();
 		_titlePath.addText(0, _titleFont->ascent, _titleFont, text);
 		update();
 	}, lifetime());
 
-	if (clickContextOther) {
+	if (const auto other = descriptor.clickContextOther) {
 		_about->setClickHandlerFilter([=](
 				const ClickHandlerPtr &handler,
 				Qt::MouseButton button) {
 			ActivateClickHandler(_about, handler, {
 				button,
-				clickContextOther()
+				other()
 			});
 			return false;
 		});
@@ -187,12 +134,22 @@ TopBar::TopBar(
 	) | rpl::start_with_next([=] {
 		TopBarAbstract::computeIsDark();
 
-		if (!_light && !TopBarAbstract::isDark()) {
+		if (_logo == u"dollar"_q) {
+			_dollar = ScaleTo(QImage(u":/gui/art/business_logo.png"_q));
+			_ministars.setColorOverride(
+				QGradientStops{{ 0, st::premiumButtonFg->c }});
+		} else if (_logo == u"affiliate"_q) {
+			_dollar = ScaleTo(QImage(u":/gui/art/affiliate_logo.png"_q));
+			_ministars.setColorOverride(descriptor.gradientStops);
+		} else if (!_light && !TopBarAbstract::isDark()) {
 			_star.load(Svg());
-			_ministars.setColorOverride(st::premiumButtonFg->c);
+			_ministars.setColorOverride(
+				QGradientStops{{ 0, st::premiumButtonFg->c }});
 		} else {
-			_star.load(ColorizedSvg());
-			_ministars.setColorOverride(std::nullopt);
+			_star.load(ColorizedSvg(descriptor.gradientStops
+				? (*descriptor.gradientStops)
+				: Ui::Premium::ButtonGradientStops()));
+			_ministars.setColorOverride(descriptor.gradientStops);
 		}
 		auto event = QResizeEvent(size(), size());
 		resizeEvent(&event);
@@ -226,18 +183,18 @@ void TopBar::setTextPosition(int x, int y) {
 rpl::producer<int> TopBar::additionalHeight() const {
 	return _about->heightValue(
 	) | rpl::map([l = st().about.style.lineHeight](int height) {
-		return std::max(height - l * 2, 0);
+		return std::max(height - l, 0);
 	});
 }
 
 void TopBar::resizeEvent(QResizeEvent *e) {
-	const auto progress = (e->size().height() - minimumHeight())
-		/ float64(maximumHeight() - minimumHeight());
-	_progress.top = 1. -
-		std::clamp(
-			(1. - progress) / kBodyAnimationPart,
-			0.,
-			1.);
+	const auto max = maximumHeight();
+	const auto min = minimumHeight();
+	const auto progress = (max > min)
+		? ((e->size().height() - min) / float64(max - min))
+		: 1.;
+	_progress.top = 1.
+		- std::clamp((1. - progress) / kBodyAnimationPart, 0., 1.);
 	_progress.body = _progress.top;
 	_progress.title = 1. - progress;
 	_progress.scaleTitle = 1. + kTitleAdditionalScale * progress;
@@ -265,8 +222,6 @@ void TopBar::resizeEvent(QResizeEvent *e) {
 void TopBar::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
-	p.fillRect(e->rect(), Qt::transparent);
-
 	const auto r = rect();
 
 	if (!_light && !TopBarAbstract::isDark()) {
@@ -290,7 +245,12 @@ void TopBar::paintEvent(QPaintEvent *e) {
 	}
 	p.resetTransform();
 
-	_star.render(&p, _starRect);
+	if (!_dollar.isNull()) {
+		auto hq = PainterHighQualityEnabler(p);
+		p.drawImage(_starRect, _dollar);
+	} else {
+		_star.render(&p, _starRect);
+	}
 
 	const auto color = _light
 		? st::settingsPremiumUserTitle.textFg

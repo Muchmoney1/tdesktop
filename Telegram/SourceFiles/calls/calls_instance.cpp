@@ -522,20 +522,6 @@ void Instance::showInfoPanel(not_null<GroupCall*> call) {
 	}
 }
 
-void Instance::setCurrentAudioDevice(bool input, const QString &deviceId) {
-	if (input) {
-		Core::App().settings().setCallInputDeviceId(deviceId);
-	} else {
-		Core::App().settings().setCallOutputDeviceId(deviceId);
-	}
-	Core::App().saveSettingsDelayed();
-	if (const auto call = currentCall()) {
-		call->setCurrentAudioDevice(input, deviceId);
-	} else if (const auto group = currentGroupCall()) {
-		group->setCurrentAudioDevice(input, deviceId);
-	}
-}
-
 FnMut<void()> Instance::addAsyncWaiter() {
 	auto semaphore = std::make_unique<crl::semaphore>();
 	const auto raw = semaphore.get();
@@ -592,8 +578,7 @@ void Instance::handleCallUpdate(
 		if (inCall()
 			&& _currentCall->type() == Call::Type::Outgoing
 			&& _currentCall->user()->id == session->userPeerId()
-			&& (peerFromUser(phoneCall.vparticipant_id())
-				== _currentCall->user()->session().userPeerId())) {
+			&& (user->id == _currentCall->user()->session().userPeerId())) {
 			// Ignore call from the same running app, other account.
 			return;
 		}
@@ -683,7 +668,8 @@ bool Instance::inCall() const {
 		return false;
 	}
 	const auto state = _currentCall->state();
-	return (state != Call::State::Busy);
+	return (state != Call::State::Busy)
+		&& (state != Call::State::WaitingUserConfirmation);
 }
 
 bool Instance::inGroupCall() const {
@@ -846,7 +832,7 @@ std::shared_ptr<tgcalls::VideoCaptureInterface> Instance::getVideoCapture(
 		if (deviceId) {
 			result->switchToDevice(
 				(deviceId->isEmpty()
-					? Core::App().settings().callVideoInputDeviceId()
+					? Core::App().settings().cameraDeviceId()
 					: *deviceId).toStdString(),
 				isScreenCapture);
 		}
@@ -854,7 +840,7 @@ std::shared_ptr<tgcalls::VideoCaptureInterface> Instance::getVideoCapture(
 	}
 	const auto startDeviceId = (deviceId && !deviceId->isEmpty())
 		? *deviceId
-		: Core::App().settings().callVideoInputDeviceId();
+		: Core::App().settings().cameraDeviceId();
 	auto result = std::shared_ptr<tgcalls::VideoCaptureInterface>(
 		tgcalls::VideoCaptureInterface::Create(
 			tgcalls::StaticThreads::getThreads(),

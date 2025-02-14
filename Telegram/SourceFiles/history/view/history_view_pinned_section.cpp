@@ -94,6 +94,7 @@ PinnedWidget::PinnedWidget(
 	not_null<Window::SessionController*> controller,
 	not_null<Data::Thread*> thread)
 : Window::SectionWidget(parent, controller, thread->peer())
+, WindowListDelegate(controller)
 , _thread(thread->migrateToOrMe())
 , _history(thread->owningHistory())
 , _migratedPeer(thread->asHistory()
@@ -161,7 +162,7 @@ PinnedWidget::PinnedWidget(
 
 	_inner = _scroll->setOwnedWidget(object_ptr<ListWidget>(
 		this,
-		controller,
+		&controller->session(),
 		static_cast<ListDelegate*>(this)));
 	_scroll->move(0, _topBar->height());
 	_scroll->show();
@@ -597,7 +598,11 @@ void PinnedWidget::listUpdateDateLink(
 }
 
 bool PinnedWidget::listElementHideReply(not_null<const Element*> view) {
-	return (view->data()->replyToId() == _thread->topicRootId());
+	if (const auto reply = view->data()->Get<HistoryMessageReply>()) {
+		return !reply->fields().manualQuote
+			&& (reply->messageId() == _thread->topicRootId());
+	}
+	return false;
 }
 
 bool PinnedWidget::listElementShownUnread(not_null<const Element*> view) {
@@ -612,6 +617,15 @@ bool PinnedWidget::listIsGoodForAroundPosition(
 void PinnedWidget::listSendBotCommand(
 	const QString &command,
 	const FullMsgId &context) {
+}
+
+void PinnedWidget::listSearch(
+		const QString &query,
+		const FullMsgId &context) {
+	const auto inChat = _history->peer->isUser()
+		? Dialogs::Key()
+		: Dialogs::Key(_history);
+	controller()->searchMessages(query, inChat);
 }
 
 void PinnedWidget::listHandleViaClick(not_null<UserData*> bot) {
@@ -663,6 +677,11 @@ void PinnedWidget::listPaintEmpty(
 
 QString PinnedWidget::listElementAuthorRank(not_null<const Element*> view) {
 	return {};
+}
+
+bool PinnedWidget::listElementHideTopicButton(
+		not_null<const Element*> view) {
+	return true;
 }
 
 History *PinnedWidget::listTranslateHistory() {

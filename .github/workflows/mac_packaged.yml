@@ -49,8 +49,8 @@ jobs:
 
     env:
       GIT: "https://github.com"
-      OPENALDIR: "/usr/local/opt/openal-soft"
-      UPLOAD_ARTIFACT: "false"
+      CMAKE_PREFIX_PATH: "/opt/homebrew/opt/ffmpeg@6:/opt/homebrew/opt/openal-soft"
+      UPLOAD_ARTIFACT: "true"
       ONLY_CACHE: "false"
       MANUAL_CACHING: "1"
       AUTO_CACHING: "1"
@@ -60,17 +60,20 @@ jobs:
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Clone.
-        uses: actions/checkout@v3.1.0
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           path: ${{ env.REPO_NAME }}
 
       - name: First set up.
         run: |
-          brew install autoconf automake boost cmake ffmpeg openal-soft openssl opus ninja pkg-config python qt yasm xz
+          brew update
+          brew upgrade || true
+          brew install ada-url autoconf automake boost cmake ffmpeg libtool openal-soft openh264 openssl opus ninja pkg-config python qt yasm xz
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
           xcodebuild -version > CACHE_KEY.txt
+          brew list --versions >> CACHE_KEY.txt
           echo $MANUAL_CACHING >> CACHE_KEY.txt
           echo "$GITHUB_WORKSPACE" >> CACHE_KEY.txt
           if [ "$AUTO_CACHING" = "1" ]; then
@@ -92,11 +95,11 @@ jobs:
           ./autogen.sh
           ./configure --disable-examples --disable-doc
           make -j$(sysctl -n hw.logicalcpu)
-          make install
+          sudo make install
 
       - name: WebRTC cache.
         id: cache-webrtc
-        uses: actions/cache@v3.0.11
+        uses: actions/cache@v4
         with:
           path: ${{ env.LibrariesPath }}/tg_owt
           key: ${{ runner.OS }}-webrtc-${{ env.CACHE_KEY }}-${{ hashFiles('**/tg_owt-version.json') }}
@@ -105,10 +108,14 @@ jobs:
         run: |
           cd $LibrariesPath
 
-          git clone --recursive --depth=1 $GIT/desktop-app/tg_owt.git
+          git clone --depth=1 --recursive --shallow-submodules $GIT/desktop-app/tg_owt.git
           cd tg_owt
 
-          cmake -B build . -GNinja -DCMAKE_BUILD_TYPE=Debug
+          cmake -Bbuild -GNinja . \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_C_FLAGS_DEBUG="" \
+          -DCMAKE_CXX_FLAGS_DEBUG=""
+
           cmake --build build --parallel
 
       - name: Telegram Desktop build.
@@ -129,6 +136,9 @@ jobs:
 
           cmake -Bbuild -GNinja . \
           -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_C_FLAGS_DEBUG="" \
+          -DCMAKE_CXX_FLAGS_DEBUG="" \
+          -DCMAKE_EXE_LINKER_FLAGS="-s" \
           -DCMAKE_FIND_FRAMEWORK=LAST \
           -DTDESKTOP_API_TEST=ON \
           -DDESKTOP_APP_USE_PACKAGED_LAZY=ON \
@@ -150,7 +160,7 @@ jobs:
           cd $REPO_NAME/build
           mkdir artifact
           mv Telegram.dmg artifact/
-      - uses: actions/upload-artifact@master
+      - uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         name: Upload artifact.
         with:

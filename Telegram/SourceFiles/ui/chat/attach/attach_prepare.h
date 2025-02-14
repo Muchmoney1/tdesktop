@@ -74,12 +74,14 @@ struct PreparedFile {
 	[[nodiscard]] bool canBeInAlbumType(AlbumType album) const;
 	[[nodiscard]] AlbumType albumType(bool sendImagesAsPhotos) const;
 	[[nodiscard]] bool isSticker() const;
+	[[nodiscard]] bool isVideoFile() const;
 	[[nodiscard]] bool isGifv() const;
 
 	QString path;
 	QByteArray content;
 	int64 size = 0;
-	std::unique_ptr<Ui::PreparedFileInformation> information;
+	std::unique_ptr<PreparedFileInformation> information;
+	std::unique_ptr<PreparedFile> videoCover;
 	QImage preview;
 	QSize shownDimensions;
 	QSize originalDimensions;
@@ -88,6 +90,7 @@ struct PreparedFile {
 };
 
 [[nodiscard]] bool CanBeInAlbumType(PreparedFile::Type type, AlbumType album);
+[[nodiscard]] bool InsertTextOnImageCancel(const QString &text);
 
 struct PreparedList {
 	enum class Error {
@@ -112,6 +115,12 @@ struct PreparedList {
 	void mergeToEnd(PreparedList &&other, bool cutToAlbumSize = false);
 
 	[[nodiscard]] bool canAddCaption(bool sendingAlbum, bool compress) const;
+	[[nodiscard]] bool canMoveCaption(
+		bool sendingAlbum,
+		bool compress) const;
+	[[nodiscard]] bool canChangePrice(
+		bool sendingAlbum,
+		bool compress) const;
 	[[nodiscard]] bool canBeSentInSlowmode() const;
 	[[nodiscard]] bool canBeSentInSlowmodeWith(
 		const PreparedList &other) const;
@@ -120,6 +129,7 @@ struct PreparedList {
 	[[nodiscard]] bool hasSendImagesAsPhotosOption(bool slowmode) const;
 	[[nodiscard]] bool canHaveEditorHintLabel() const;
 	[[nodiscard]] bool hasSticker() const;
+	[[nodiscard]] bool hasSpoilerMenu(bool compress) const;
 
 	Error error = Error::None;
 	QString errorData;

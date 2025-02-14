@@ -15,18 +15,26 @@ class ChannelData;
 
 namespace Data {
 class Session;
+struct UniqueGift;
 } // namespace Data
+
+namespace Iv {
+class Data;
+} // namespace Iv
 
 enum class WebPageType : uint8 {
 	None,
 
 	Message,
+	Album,
 
 	Group,
 	GroupWithRequest,
+	GroupBoost,
 	Channel,
 	ChannelWithRequest,
 	ChannelBoost,
+	Giftcode,
 
 	Photo,
 	Video,
@@ -40,14 +48,18 @@ enum class WebPageType : uint8 {
 	WallPaper,
 	Theme,
 	Story,
+	StickerSet,
 
 	Article,
 	ArticleWithIV,
 
 	VoiceChat,
 	Livestream,
+
+	Factcheck,
 };
 [[nodiscard]] WebPageType ParseWebPageType(const MTPDwebPage &type);
+[[nodiscard]] bool IgnoreIv(WebPageType type);
 
 struct WebPageCollage {
 	using Item = std::variant<PhotoData*, DocumentData*>;
@@ -61,8 +73,18 @@ struct WebPageCollage {
 
 };
 
+struct WebPageStickerSet {
+	WebPageStickerSet() = default;
+
+	std::vector<not_null<DocumentData*>> items;
+	bool isEmoji = false;
+	bool isTextColor = false;
+
+};
+
 struct WebPageData {
 	WebPageData(not_null<Data::Session*> owner, const WebPageId &id);
+	~WebPageData();
 
 	[[nodiscard]] Data::Session &owner() const;
 	[[nodiscard]] Main::Session &session() const;
@@ -78,9 +100,13 @@ struct WebPageData {
 		PhotoData *newPhoto,
 		DocumentData *newDocument,
 		WebPageCollage &&newCollage,
+		std::unique_ptr<Iv::Data> newIv,
+		std::unique_ptr<WebPageStickerSet> newStickerSet,
+		std::shared_ptr<Data::UniqueGift> newUniqueGift,
 		int newDuration,
 		const QString &newAuthor,
 		bool newHasLargeMedia,
+		bool newPhotoIsVideoCover,
 		int newPendingTill);
 
 	static void ApplyChanges(
@@ -89,7 +115,9 @@ struct WebPageData {
 		const MTPmessages_Messages &result);
 
 	[[nodiscard]] QString displayedSiteName() const;
+	[[nodiscard]] TimeId extractVideoTimestamp() const;
 	[[nodiscard]] bool computeDefaultSmallMedia() const;
+	[[nodiscard]] bool suggestEnlargePhoto() const;
 
 	const WebPageId id = 0;
 	WebPageType type = WebPageType::None;
@@ -103,9 +131,13 @@ struct WebPageData {
 	PhotoData *photo = nullptr;
 	DocumentData *document = nullptr;
 	WebPageCollage collage;
+	std::unique_ptr<Iv::Data> iv;
+	std::unique_ptr<WebPageStickerSet> stickerSet;
+	std::shared_ptr<Data::UniqueGift> uniqueGift;
 	int duration = 0;
 	TimeId pendingTill = 0;
-	uint32 version : 30 = 0;
+	uint32 version : 29 = 0;
+	uint32 photoIsVideoCover : 1 = 0;
 	uint32 hasLargeMedia : 1 = 0;
 	uint32 failed : 1 = 0;
 

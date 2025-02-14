@@ -30,7 +30,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #if __has_include(<QtCore/QOperatingSystemVersion>)
 #include <QtCore/QOperatingSystemVersion>
 #endif // __has_include(<QtCore/QOperatingSystemVersion>)
+#if QT_VERSION < QT_VERSION_CHECK(6, 6, 0)
 #include <qpa/qwindowsysteminterface.h>
+#endif // Qt < 6.6.0
 #include <Cocoa/Cocoa.h>
 #include <CoreFoundation/CFURL.h>
 #include <IOKit/IOKitLib.h>
@@ -201,11 +203,11 @@ ApplicationDelegate *_sharedDelegate = nil;
 			"-receiveWakeNote: received, scheduling detach from audio device"));
 		Media::Audio::ScheduleDetachFromDeviceSafe();
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-		QWindowSystemInterface::handleThemeChange();
-#else // Qt >= 6.5.0
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
 		Core::App().settings().setSystemDarkMode(Platform::IsDarkMode());
-#endif // Qt < 6.5.0
+#elif QT_VERSION < QT_VERSION_CHECK(6, 6, 0) // Qt < 6.5.0
+		QWindowSystemInterface::handleThemeChange();
+#endif // Qt < 6.6.0
 	});
 }
 
@@ -265,7 +267,7 @@ void SetApplicationIcon(const QIcon &icon) {
 	NSImage *image = nil;
 	if (!icon.isNull()) {
 		auto pixmap = icon.pixmap(1024, 1024);
-		pixmap.setDevicePixelRatio(cRetinaFactor());
+		pixmap.setDevicePixelRatio(style::DevicePixelRatio());
 		image = Q2NSImage(pixmap.toImage());
 	}
 	[[NSApplication sharedApplication] setApplicationIconImage:image];
@@ -304,9 +306,10 @@ void objc_start() {
 
 	_sharedDelegate = [[ApplicationDelegate alloc] init];
 	[[NSApplication sharedApplication] setDelegate:_sharedDelegate];
-	[[[NSWorkspace sharedWorkspace] notificationCenter] addObserver: _sharedDelegate
-														   selector: @selector(receiveWakeNote:)
-															   name: NSWorkspaceDidWakeNotification object: NULL];
+	[[[NSWorkspace sharedWorkspace] notificationCenter]
+		addObserver: _sharedDelegate
+		selector: @selector(receiveWakeNote:)
+		name: NSWorkspaceDidWakeNotification object: NULL];
 }
 
 void objc_ignoreApplicationActivationRightNow() {

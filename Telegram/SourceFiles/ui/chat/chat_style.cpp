@@ -143,6 +143,21 @@ int BackgroundEmojiData::CacheIndex(
 	return (base * 2) + (selected ? 1 : 0);
 };
 
+int ColorPatternIndex(
+		const ColorIndicesCompressed &indices,
+		uint8 colorIndex,
+		bool dark) {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	if (!indices.colors
+		|| colorIndex < kSimpleColorIndexCount) {
+		return 0;
+	}
+	auto &data = (*indices.colors)[colorIndex];
+	auto &colors = dark ? data.dark : data.light;
+	return colors[2] ? 2 : colors[1] ? 1 : 0;
+}
+
 ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 	if (colorIndices) {
 		_colorIndicesLifetime = std::move(
@@ -156,6 +171,7 @@ ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 	make(_historyPsaForwardPalette, st::historyPsaForwardPalette);
 	make(_imgReplyTextPalette, st::imgReplyTextPalette);
 	make(_serviceTextPalette, st::serviceTextPalette);
+	make(_priceTagTextPalette, st::priceTagTextPalette);
 	make(_historyRepliesInvertedIcon, st::historyRepliesInvertedIcon);
 	make(_historyViewsInvertedIcon, st::historyViewsInvertedIcon);
 	make(_historyViewsSendingIcon, st::historyViewsSendingIcon);
@@ -171,10 +187,14 @@ ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 	make(_msgBotKbPaymentIcon, st::msgBotKbPaymentIcon);
 	make(_msgBotKbSwitchPmIcon, st::msgBotKbSwitchPmIcon);
 	make(_msgBotKbWebviewIcon, st::msgBotKbWebviewIcon);
+	make(_msgBotKbCopyIcon, st::msgBotKbCopyIcon);
 	make(_historyFastCommentsIcon, st::historyFastCommentsIcon);
 	make(_historyFastShareIcon, st::historyFastShareIcon);
 	make(_historyFastTranscribeIcon, st::historyFastTranscribeIcon);
+	make(_historyFastTranscribeLock, st::historyFastTranscribeLock);
 	make(_historyGoToOriginalIcon, st::historyGoToOriginalIcon);
+	make(_historyFastCloseIcon, st::historyFastCloseIcon);
+	make(_historyFastMoreIcon, st::historyFastMoreIcon);
 	make(_historyMapPoint, st::historyMapPoint);
 	make(_historyMapPointInner, st::historyMapPointInner);
 	make(_youtubeIcon, st::youtubeIcon);
@@ -452,6 +472,12 @@ ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 		st::historyTranscribeOutIcon,
 		st::historyTranscribeOutIconSelected);
 	make(
+		&MessageStyle::historyTranscribeLock,
+		st::historyTranscribeInLock,
+		st::historyTranscribeInLockSelected,
+		st::historyTranscribeOutLock,
+		st::historyTranscribeOutLockSelected);
+	make(
 		&MessageStyle::historyTranscribeHide,
 		st::historyTranscribeInHide,
 		st::historyTranscribeInHideSelected,
@@ -505,6 +531,26 @@ ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 		&MessageImageStyle::historyVideoMessageMute,
 		st::historyVideoMessageMute,
 		st::historyVideoMessageMuteSelected);
+	make(
+		&MessageImageStyle::historyVideoMessageTtlIcon,
+		st::historyVideoMessageTtlIcon,
+		st::historyVideoMessageTtlIconSelected);
+	make(
+		&MessageImageStyle::historyPageEnlarge,
+		st::historyPageEnlarge,
+		st::historyPageEnlargeSelected);
+	make(
+		&MessageStyle::historyVoiceMessageTTL,
+		st::historyVoiceMessageInTTL,
+		st::historyVoiceMessageInTTLSelected,
+		st::historyVoiceMessageOutTTL,
+		st::historyVoiceMessageOutTTLSelected);
+	make(
+		&MessageStyle::liveLocationLongIcon,
+		st::liveLocationLongInIcon,
+		st::liveLocationLongInIconSelected,
+		st::liveLocationLongOutIcon,
+		st::liveLocationLongOutIconSelected);
 
 	updateDarkValue();
 }
@@ -561,7 +607,7 @@ std::span<Text::SpecialColor> ChatStyle::highlightColors() const {
 		// constant, symbol, deleted
 		push(statisticsChartLineRed());
 
-		// selector, attr-name, string, char, builtin, inserted
+		// selector, attr-name, string, char, builtin
 		push(statisticsChartLineOrange());
 
 		// operator, entity, url
@@ -573,8 +619,9 @@ std::span<Text::SpecialColor> ChatStyle::highlightColors() const {
 		// class-name
 		push(statisticsChartLinePurple());
 
+		// inserted
+		push(statisticsChartLineGreen());
 		//push(statisticsChartLineLightgreen());
-		//push(statisticsChartLineGreen());
 		//push(statisticsChartLineGolden());
 	}
 	return _highlightColors;
@@ -605,7 +652,7 @@ void ChatStyle::clearColorIndexCaches() {
 
 void ChatStyle::assignPalette(not_null<const style::palette*> palette) {
 	*static_cast<style::palette*>(this) = *palette;
-	style::internal::resetIcons();
+	style::internal::ResetIcons();
 
 	clearColorIndexCaches();
 	for (auto &style : _messageStyles) {

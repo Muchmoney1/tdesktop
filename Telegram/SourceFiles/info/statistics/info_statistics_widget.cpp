@@ -7,22 +7,27 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/statistics/info_statistics_widget.h"
 
-#include "info/statistics/info_statistics_inner_widget.h"
+#include "data/data_session.h"
+#include "data/data_stories.h"
 #include "info/info_controller.h"
 #include "info/info_memento.h"
+#include "info/statistics/info_statistics_inner_widget.h"
 #include "lang/lang_keys.h"
+#include "main/main_session.h"
+#include "ui/ui_utility.h"
 
 namespace Info::Statistics {
 
 Memento::Memento(not_null<Controller*> controller)
-: ContentMemento(Tag{
-	controller->statisticsPeer(),
-	controller->statisticsContextId(),
-}) {
+: ContentMemento(controller->statisticsTag()) {
 }
 
 Memento::Memento(not_null<PeerData*> peer, FullMsgId contextId)
-: ContentMemento(Tag{ peer, contextId }) {
+: ContentMemento(Tag{ peer, contextId, {} }) {
+}
+
+Memento::Memento(not_null<PeerData*> peer, FullStoryId storyId)
+: ContentMemento(Tag{ peer, {}, storyId }) {
 }
 
 Memento::~Memento() = default;
@@ -56,8 +61,9 @@ Widget::Widget(
 	object_ptr<InnerWidget>(
 		this,
 		controller,
-		controller->statisticsPeer(),
-		controller->statisticsContextId()))) {
+		controller->statisticsTag().peer,
+		controller->statisticsTag().contextId,
+		controller->statisticsTag().storyId))) {
 	_inner->showRequests(
 	) | rpl::start_with_next([=](InnerWidget::ShowRequest request) {
 		if (request.history) {
@@ -67,24 +73,24 @@ Widget::Widget(
 				request.history.msg);
 		} else if (request.info) {
 			controller->showPeerInfo(request.info);
-		} else if (request.messageStatistic) {
+		} else if (request.messageStatistic || request.storyStatistic) {
 			controller->showSection(Make(
-				controller->statisticsPeer(),
-				request.messageStatistic));
+				controller->statisticsTag().peer,
+				request.messageStatistic,
+				request.storyStatistic));
+		} else if (const auto &s = request.story) {
+			if (const auto peer = controller->session().data().peer(s.peer)) {
+				controller->parentController()->openPeerStory(
+					peer,
+					s.story,
+					{ Data::StoriesContextSingle() });
+			}
 		}
 	}, _inner->lifetime());
 	_inner->scrollToRequests(
-	) | rpl::start_with_next([=](const Ui::ScrollToRequest &request) {
+	) | rpl::start_with_next([this](const Ui::ScrollToRequest &request) {
 		scrollTo(request);
 	}, _inner->lifetime());
-}
-
-not_null<PeerData*> Widget::peer() const {
-	return _inner->peer();
-}
-
-FullMsgId Widget::contextId() const {
-	return _inner->contextId();
 }
 
 bool Widget::showInternal(not_null<ContentMemento*> memento) {
@@ -92,8 +98,10 @@ bool Widget::showInternal(not_null<ContentMemento*> memento) {
 }
 
 rpl::producer<QString> Widget::title() {
-	return _inner->contextId()
+	return controller()->statisticsTag().contextId
 		? tr::lng_stats_message_title()
+		: controller()->statisticsTag().storyId
+		? tr::lng_stats_story_title()
 		: tr::lng_stats_title();
 }
 
@@ -131,11 +139,13 @@ void Widget::restoreState(not_null<Memento*> memento) {
 
 std::shared_ptr<Info::Memento> Make(
 		not_null<PeerData*> peer,
-		FullMsgId contextId) {
+		FullMsgId contextId,
+		FullStoryId storyId) {
+	const auto memento = storyId
+		? std::make_shared<Memento>(peer, storyId)
+		: std::make_shared<Memento>(peer, contextId);
 	return std::make_shared<Info::Memento>(
-		std::vector<std::shared_ptr<ContentMemento>>(
-			1,
-			std::make_shared<Memento>(peer, contextId)));
+		std::vector<std::shared_ptr<ContentMemento>>(1, std::move(memento)));
 }
 
 } // namespace Info::Statistics

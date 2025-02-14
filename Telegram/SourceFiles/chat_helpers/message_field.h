@@ -35,29 +35,37 @@ class Show;
 
 namespace Ui {
 class PopupMenu;
+class Show;
 } // namespace Ui
 
 [[nodiscard]] QString PrepareMentionTag(not_null<UserData*> user);
 [[nodiscard]] TextWithTags PrepareEditText(not_null<HistoryItem*> item);
 [[nodiscard]] bool EditTextChanged(
 	not_null<HistoryItem*> item,
-	const TextWithTags &updated);
+	TextWithTags updated);
 
 Fn<bool(
 	Ui::InputField::EditLinkSelection selection,
-	QString text,
+	TextWithTags text,
 	QString link,
 	Ui::InputField::EditLinkAction action)> DefaultEditLinkCallback(
 		std::shared_ptr<Main::SessionShow> show,
 		not_null<Ui::InputField*> field,
 		const style::InputField *fieldStyle = nullptr);
-void InitMessageFieldHandlers(
-	not_null<Main::Session*> session,
-	std::shared_ptr<Main::SessionShow> show, // may be null
-	not_null<Ui::InputField*> field,
-	Fn<bool()> customEmojiPaused,
-	Fn<bool(not_null<DocumentData*>)> allowPremiumEmoji = nullptr,
-	const style::InputField *fieldStyle = nullptr);
+Fn<void(QString now, Fn<void(QString)> save)> DefaultEditLanguageCallback(
+	std::shared_ptr<Ui::Show> show);
+
+struct MessageFieldHandlersArgs {
+	not_null<Main::Session*> session;
+	std::shared_ptr<Main::SessionShow> show; // may be null
+	not_null<Ui::InputField*> field;
+	Fn<bool()> customEmojiPaused;
+	Fn<bool(not_null<DocumentData*>)> allowPremiumEmoji;
+	const style::InputField *fieldStyle = nullptr;
+	base::flat_set<QString> allowMarkdownTags;
+};
+void InitMessageFieldHandlers(MessageFieldHandlersArgs &&args);
+
 void InitMessageFieldHandlers(
 	not_null<Window::SessionController*> controller,
 	not_null<Ui::InputField*> field,
@@ -77,7 +85,14 @@ void InitSpellchecker(
 	not_null<Ui::InputField*> field,
 	bool skipDictionariesManager = false);
 
+[[nodiscard]] Fn<void(not_null<Ui::InputField*>)> FactcheckFieldIniter(
+	std::shared_ptr<Main::SessionShow> show);
+
 bool HasSendText(not_null<const Ui::InputField*> field);
+
+void InitMessageFieldFade(
+	not_null<Ui::InputField*> field,
+	const style::color &bg);
 
 struct InlineBotQuery {
 	QString query;
@@ -143,3 +158,14 @@ private:
 [[nodiscard]] base::unique_qptr<Ui::RpWidget> CreateDisabledFieldView(
 	QWidget *parent,
 	not_null<PeerData*> peer);
+[[nodiscard]] base::unique_qptr<Ui::RpWidget> TextErrorSendRestriction(
+	QWidget *parent,
+	const QString &text);
+[[nodiscard]] base::unique_qptr<Ui::RpWidget> PremiumRequiredSendRestriction(
+	QWidget *parent,
+	not_null<UserData*> user,
+	not_null<Window::SessionController*> controller);
+
+void SelectTextInFieldWithMargins(
+	not_null<Ui::InputField*> field,
+	const TextSelection &selection);

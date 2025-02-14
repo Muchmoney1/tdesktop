@@ -17,17 +17,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 struct WebPageData;
 class VoiceSeekClickHandler;
+class ReplyKeyboard;
 
 namespace Ui {
 struct ChatPaintContext;
 class ChatStyle;
 struct PeerUserpicView;
-class SpoilerAnimation;
 } // namespace Ui
+
+namespace Ui::Text {
+struct GeometryDescriptor;
+} // namespace Ui::Text
 
 namespace Data {
 class Session;
 class Story;
+class SavedSublist;
+struct UnavailableReason;
 } // namespace Data
 
 namespace Media::Player {
@@ -43,6 +49,13 @@ class Element;
 class Document;
 class TranscribeButton;
 } // namespace HistoryView
+
+namespace style {
+struct BotKeyboardButton;
+} // namespace style
+
+extern const char kOptionFastButtonsMode[];
+[[nodiscard]] bool FastButtonsMode();
 
 struct HistoryMessageVia : public RuntimeComponent<HistoryMessageVia, HistoryItem> {
 	void create(not_null<Data::Session*> owner, UserId userId);
@@ -75,7 +88,8 @@ struct HistoryMessageViews : public RuntimeComponent<HistoryMessageViews, Histor
 };
 
 struct HistoryMessageSigned : public RuntimeComponent<HistoryMessageSigned, HistoryItem> {
-	QString postAuthor;
+	QString author;
+	UserData *viaBusinessBot = nullptr;
 	bool isAnonymousRank = false;
 };
 
@@ -121,11 +135,17 @@ private:
 };
 
 struct HistoryMessageForwarded : public RuntimeComponent<HistoryMessageForwarded, HistoryItem> {
-	void create(const HistoryMessageVia *via) const;
+	void create(
+		const HistoryMessageVia *via,
+		not_null<const HistoryItem*> item) const;
+
+	[[nodiscard]] bool forwardOfForward() const {
+		return savedFromSender || savedFromHiddenSenderInfo;
+	}
 
 	TimeId originalDate = 0;
 	PeerData *originalSender = nullptr;
-	std::unique_ptr<HiddenSenderInfo> hiddenSenderInfo;
+	std::unique_ptr<HiddenSenderInfo> originalHiddenSenderInfo;
 	QString originalPostAuthor;
 	QString psaType;
 	MsgId originalId = 0;
@@ -133,24 +153,22 @@ struct HistoryMessageForwarded : public RuntimeComponent<HistoryMessageForwarded
 
 	PeerData *savedFromPeer = nullptr;
 	MsgId savedFromMsgId = 0;
+
+	PeerData *savedFromSender = nullptr;
+	std::unique_ptr<HiddenSenderInfo> savedFromHiddenSenderInfo;
+
+	bool savedFromOutgoing = false;
 	bool imported = false;
 	bool story = false;
 };
 
-struct HistoryMessageSponsored : public RuntimeComponent<HistoryMessageSponsored, HistoryItem> {
-	enum class Type : uchar {
-		User,
-		Group,
-		Broadcast,
-		Post,
-		Bot,
-		ExternalLink,
-	};
-	std::unique_ptr<HiddenSenderInfo> sender;
-	Type type = Type::User;
-	bool recommended = false;
-	bool isForceUserpicDisplay = false;
-	QString externalLink;
+struct HistoryMessageSavedMediaData : public RuntimeComponent<HistoryMessageSavedMediaData, HistoryItem> {
+	TextWithEntities text;
+	std::unique_ptr<Data::Media> media;
+};
+
+struct HistoryMessageSaved : public RuntimeComponent<HistoryMessageSaved, HistoryItem> {
+	Data::SavedSublist *sublist = nullptr;
 };
 
 class ReplyToMessagePointer final {
@@ -230,7 +248,10 @@ private:
 };
 
 struct ReplyFields {
+	[[nodiscard]] ReplyFields clone(not_null<HistoryItem*> parent) const;
+
 	TextWithEntities quote;
+	std::unique_ptr<Data::Media> externalMedia;
 	PeerId externalSenderId = 0;
 	QString externalSenderName;
 	QString externalPostAuthor;
@@ -238,12 +259,13 @@ struct ReplyFields {
 	MsgId messageId = 0;
 	MsgId topMessageId = 0;
 	StoryId storyId = 0;
-	bool topicPost = false;
-	bool manualQuote = false;
+	uint32 quoteOffset : 30 = 0;
+	uint32 manualQuote : 1 = 0;
+	uint32 topicPost : 1 = 0;
 };
 
 [[nodiscard]] ReplyFields ReplyFieldsFromMTP(
-	not_null<History*> history,
+	not_null<HistoryItem*> item,
 	const MTPMessageReplyHeader &reply);
 
 [[nodiscard]] FullReplyTo ReplyToFromMTP(
@@ -260,8 +282,6 @@ struct HistoryMessageReply
 	HistoryMessageReply &operator=(HistoryMessageReply &&other);
 	~HistoryMessageReply();
 
-	static constexpr auto kBarAlpha = 230. / 255.;
-
 	void set(ReplyFields fields);
 
 	void updateFields(
@@ -269,22 +289,14 @@ struct HistoryMessageReply
 		MsgId messageId,
 		MsgId topMessageId,
 		bool topicPost);
-	bool updateData(not_null<HistoryItem*> holder, bool force = false);
+	void updateData(not_null<HistoryItem*> holder, bool force = false);
 
 	// Must be called before destructor.
 	void clearData(not_null<HistoryItem*> holder);
 
 	[[nodiscard]] bool external() const;
-	[[nodiscard]] PeerData *sender(not_null<HistoryItem*> holder) const;
-	[[nodiscard]] QString senderName(not_null<HistoryItem*> holder) const;
-	[[nodiscard]] QString senderName(not_null<PeerData*> peer) const;
-	[[nodiscard]] bool isNameUpdated(not_null<HistoryItem*> holder) const;
-	void updateName(
-		not_null<HistoryItem*> holder,
-		std::optional<PeerData*> resolvedSender = std::nullopt) const;
-	[[nodiscard]] int resizeToWidth(int width) const;
-	[[nodiscard]] int height() const;
-	[[nodiscard]] QMargins margins() const;
+	[[nodiscard]] bool displayAsExternal(
+		not_null<HistoryItem*> holder) const;
 	void itemRemoved(
 		not_null<HistoryItem*> holder,
 		not_null<HistoryItem*> removed);
@@ -292,17 +304,7 @@ struct HistoryMessageReply
 		not_null<HistoryItem*> holder,
 		not_null<Data::Story*> removed);
 
-	void paint(
-		Painter &p,
-		not_null<const HistoryView::Element*> holder,
-		const Ui::ChatPaintContext &context,
-		int x,
-		int y,
-		int w,
-		bool inBubble) const;
-	void unloadPersistentAnimation();
-
-	[[nodiscard]] ReplyFields fields() const {
+	[[nodiscard]] const ReplyFields &fields() const {
 		return _fields;
 	}
 	[[nodiscard]] PeerId externalPeerId() const {
@@ -317,21 +319,24 @@ struct HistoryMessageReply
 	[[nodiscard]] MsgId topMessageId() const {
 		return _fields.topMessageId;
 	}
-	[[nodiscard]] int maxWidth() const {
-		return _maxWidth;
-	}
-	[[nodiscard]] ClickHandlerPtr link() const {
-		return _link;
-	}
 	[[nodiscard]] bool topicPost() const {
 		return _fields.topicPost;
 	}
 	[[nodiscard]] bool manualQuote() const {
 		return _fields.manualQuote;
 	}
-	[[nodiscard]] QString statePhrase() const;
+	[[nodiscard]] bool unavailable() const {
+		return _unavailable;
+	}
+	[[nodiscard]] bool displaying() const {
+		return _displaying;
+	}
+	[[nodiscard]] bool multiline() const {
+		return _multiline;
+	}
 
-	void setLinkFrom(not_null<HistoryItem*> holder);
+	[[nodiscard]] bool acquireResolve();
+
 	void setTopMessageId(MsgId topMessageId);
 
 	void refreshReplyToMedia();
@@ -340,25 +345,14 @@ struct HistoryMessageReply
 	WebPageId replyToWebPageId = 0;
 	ReplyToMessagePointer resolvedMessage;
 	ReplyToStoryPointer resolvedStory;
-	std::unique_ptr<HistoryMessageVia> originalVia;
-	std::unique_ptr<Ui::SpoilerAnimation> spoiler;
-
-	struct {
-		mutable std::unique_ptr<Ui::RippleAnimation> animation;
-		QPoint lastPoint;
-	} ripple;
 
 private:
 	ReplyFields _fields;
-	ClickHandlerPtr _link;
-	mutable Ui::Text::String _name;
-	mutable Ui::Text::String _text;
-	mutable PeerData *_externalSender = nullptr;
-	mutable int _maxWidth = 0;
-	mutable int _minHeight = 0;
-	mutable int _height = 0;
-	mutable int _nameVersion = 0;
 	uint8 _unavailable : 1 = 0;
+	uint8 _displaying : 1 = 0;
+	uint8 _multiline : 1 = 0;
+	uint8 _pendingResolve : 1 = 0;
+	uint8 _requestedResolve : 1 = 0;
 
 };
 
@@ -513,6 +507,7 @@ public:
 		int outerWidth,
 		const QRect &clip) const;
 	ClickHandlerPtr getLink(QPoint point) const;
+	ClickHandlerPtr getLinkByIndex(int index) const;
 
 	void clickHandlerActiveChanged(
 		const ClickHandlerPtr &p,
@@ -546,6 +541,7 @@ private:
 	};
 
 	void startAnimation(int i, int j, int direction);
+	[[nodiscard]] bool hasFastButtonMode() const;
 
 	ButtonCoords findButtonCoordsByClickHandler(const ClickHandlerPtr &p);
 
@@ -578,6 +574,39 @@ struct HistoryMessageLogEntryOriginal
 
 };
 
+struct MessageFactcheck {
+	TextWithEntities text;
+	QString country;
+	uint64 hash = 0;
+	bool needCheck = false;
+
+	[[nodiscard]] bool empty() const {
+		return text.empty() && country.isEmpty() && !hash;
+	}
+	explicit operator bool() const {
+		return !empty();
+	}
+};
+
+[[nodiscard]] MessageFactcheck FromMTP(
+	not_null<HistoryItem*> item,
+	const tl::conditional<MTPFactCheck> &factcheck);
+[[nodiscard]] MessageFactcheck FromMTP(
+	not_null<Main::Session*> session,
+	const tl::conditional<MTPFactCheck> &factcheck);
+
+struct HistoryMessageFactcheck
+: public RuntimeComponent<HistoryMessageFactcheck, HistoryItem> {
+	MessageFactcheck data;
+	WebPageData *page = nullptr;
+	bool requested = false;
+};
+
+struct HistoryMessageRestrictions
+: public RuntimeComponent<HistoryMessageRestrictions, HistoryItem> {
+	std::vector<Data::UnavailableReason> reasons;
+};
+
 struct HistoryServiceData
 : public RuntimeComponent<HistoryServiceData, HistoryItem> {
 	std::vector<ClickHandlerPtr> textLinks;
@@ -590,6 +619,8 @@ struct HistoryServiceDependentData {
 	MsgId msgId = 0;
 	MsgId topId = 0;
 	bool topicPost = false;
+	bool pendingResolve = false;
+	bool requestedResolve = false;
 };
 
 struct HistoryServicePinned
@@ -629,15 +660,35 @@ struct HistoryServicePayment
 : public RuntimeComponent<HistoryServicePayment, HistoryItem>
 , public HistoryServiceDependentData {
 	QString slug;
-	QString amount;
+	TextWithEntities amount;
 	ClickHandlerPtr invoiceLink;
 	bool recurringInit = false;
 	bool recurringUsed = false;
+	bool isCreditsCurrency = false;
 };
 
 struct HistoryServiceSameBackground
 : public RuntimeComponent<HistoryServiceSameBackground, HistoryItem>
 , public HistoryServiceDependentData {
+};
+
+struct HistoryServiceGiveawayResults
+: public RuntimeComponent<HistoryServiceGiveawayResults, HistoryItem>
+, public HistoryServiceDependentData {
+};
+
+struct HistoryServiceCustomLink
+: public RuntimeComponent<HistoryServiceCustomLink, HistoryItem> {
+	ClickHandlerPtr link;
+};
+
+struct HistoryServicePaymentRefund
+: public RuntimeComponent<HistoryServicePaymentRefund, HistoryItem> {
+	ClickHandlerPtr link;
+	PeerData *peer = nullptr;
+	QString transactionId;
+	QString currency;
+	uint64 amount = 0;
 };
 
 enum class HistorySelfDestructType {
@@ -700,8 +751,7 @@ struct HistoryDocumentCaptioned : public RuntimeComponent<HistoryDocumentCaption
 };
 
 struct HistoryDocumentNamed : public RuntimeComponent<HistoryDocumentNamed, HistoryView::Document> {
-	QString name;
-	int namew = 0;
+	Ui::Text::String name;
 };
 
 struct HistoryDocumentVoicePlayback {
